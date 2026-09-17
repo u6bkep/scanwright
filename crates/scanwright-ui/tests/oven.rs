@@ -213,3 +213,41 @@ fn undersized_capacities_are_reported_not_fatal() {
 fn building_outside_rebuild_is_refused() {
     let _ = text("stray");
 }
+
+#[test]
+fn demo_tabs_render_and_fit() {
+    use scanwright_ui::demo::{Demo, TABS};
+    let mut ui = Box::new(OvenUi::new(Theme::DARK));
+    let mut list = Box::new(DisplayList::<256, 1280>::new(font::BUILTIN));
+    let mut app = Demo::new();
+    app.tick = 123;
+    for (tab, name) in TABS.iter().enumerate() {
+        app.tab = tab;
+        let report = ui.rebuild(&mut list, W as u16, H as u16, || app.build());
+        assert!(report.complete(), "{name}: {report:?}");
+        let fb = render(&list);
+        assert!(fb.iter().all(|&p| p != 0xF81F));
+        save(&format!("demo-{}.png", name.to_lowercase()), &fb);
+        let cost = cost::analyze(&list.view(), &CostModel::CORTEX_M33, &SCANOUT);
+        println!(
+            "demo[{name}]: {} nodes, {} text B, {} hits, {} items + {} glyphs; predicted worst line {} cyc, {} % of a core, {} late",
+            report.nodes,
+            report.text_bytes,
+            report.hits,
+            report.list.items,
+            report.list.glyphs,
+            cost.worst_line_cycles,
+            cost.core_percent(&SCANOUT, H as u16),
+            cost.late_lines
+        );
+        assert!(cost.fits(), "{name}");
+    }
+
+    // The flow the bench exercises: Profiles -> RUN #2 -> lands on Home, running.
+    app.tab = 1;
+    ui.rebuild(&mut list, W as u16, H as u16, || app.build());
+    ui.touch(Touch::Down(420, 330));
+    let ev = ui.touch(Touch::Up).event.expect("RUN button under the finger");
+    app.on_event(ev);
+    assert_eq!((app.tab, app.running), (0, Some(2)));
+}

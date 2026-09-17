@@ -30,6 +30,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 mod current;
+pub mod demo;
 mod emit;
 pub mod input;
 mod layout;
