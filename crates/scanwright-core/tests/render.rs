@@ -111,3 +111,31 @@ fn cost_model_flags_a_screen_the_ring_cannot_absorb() {
     assert!(cost::analyze(&list.view(), &CostModel::CORTEX_M33, &SCANOUT).fits());
     assert!(!cost::analyze(&list.view(), &CostModel::CORTEX_M33, &tight).fits());
 }
+
+#[test]
+fn bench_scenes_build_and_do_distinct_work() {
+    let mut list = Box::new(List::new(font::BUILTIN));
+    let mut line = vec![0u16; W];
+    let ticks = std::cell::Cell::new(0u32);
+    let mut samples = Vec::new();
+    scanwright_core::bench::run(
+        &mut list,
+        &mut line,
+        W as u16,
+        H as u16,
+        || {
+            ticks.set(ticks.get() + 1);
+            ticks.get()
+        },
+        |s| samples.push(s),
+    );
+    for s in &samples {
+        println!("{:24} {:?}", s.name, s.work);
+    }
+    assert_eq!(samples.len(), 9);
+    assert_eq!(list.dropped(), 0);
+    assert!(samples[0].work.items == H as u32 && samples[0].work.lut_px == 0);
+    assert!(samples[4].work.lut_px > 0 && samples[4].work.blend_px == 0);
+    assert!(samples[5].work.blend_px > 0 && samples[5].work.lut_px == 0);
+    assert!(samples[7].work.runs > 20 * samples[7].work.glyphs / 10, "sparse runs should be mostly idle");
+}

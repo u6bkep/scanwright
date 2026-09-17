@@ -16,8 +16,23 @@ pub struct LineWork {
     pub fill_px: u32,
     pub lut_px: u32,
     pub blend_px: u32,
+    /// Items crossing the line (text runs included).
     pub items: u32,
+    /// Text runs crossing the line, whether or not a glyph of theirs does.
+    pub runs: u32,
+    /// Glyphs crossing the line.
     pub glyphs: u32,
+}
+
+impl LineWork {
+    pub fn add(&mut self, o: &LineWork) {
+        self.fill_px += o.fill_px;
+        self.lut_px += o.lut_px;
+        self.blend_px += o.blend_px;
+        self.items += o.items;
+        self.runs += o.runs;
+        self.glyphs += o.glyphs;
+    }
 }
 
 /// Prices, in CPU cycles x 16 (so sub-cycle costs stay integral).
@@ -67,6 +82,7 @@ pub fn line_work(list: &ListView<'_>, y: u16) -> LineWork {
             OP_MASK_LUT => w.lut_px += px,
             OP_MASK_BLEND => w.blend_px += px,
             OP_RUN_LUT | OP_RUN_BLEND => {
+                w.runs += 1;
                 let refs = &list.glyphs[it.a as usize..it.a as usize + usize::from(it.n)];
                 for r in refs {
                     if r.y0 <= y && y < r.y0 + u16::from(r.mask_h) {
