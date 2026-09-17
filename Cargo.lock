@@ -145,6 +145,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "scanwright-ui"
+version = "0.0.1"
+dependencies = [
+ "png",
+ "scanwright-core",
+ "scanwright-ui",
+]
+
+[[package]]
 name = "simd-adler32"
 version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"

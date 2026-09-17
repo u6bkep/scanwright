@@ -1,0 +1,22 @@
+[package]
+name = "scanwright-ui"
+description = "Declarative UI layer for scanwright: El tree in a fixed arena, layout, widgets, touch events"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+default = []
+# Host builds: the "tree being built" pointer becomes thread-local, so
+# independent `Ui`s can rebuild on different threads (parallel tests).
+std = []
+
+[dependencies]
+scanwright-core = { path = "../scanwright-core" }
+
+[dev-dependencies]
+scanwright-ui = { path = ".", features = ["std"] }
+png = "0.17"

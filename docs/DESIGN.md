@@ -51,8 +51,9 @@ Identical under a 200 Hz x 1200 B ping flood plus an HTTP fetch loop. Frame
 busy time varies < 0.2 %. The blend stress case exceeds the line budget on its
 worst lines and the ring absorbs it (min lead 26 of 30 lines).
 
-Derived unit costs (rough): fill ≈ 1 cycle/px, LUT mask ≈ 12 cycles/px, blend
-mask ≈ 20 cycles/px. The mask figure is higher than it needs to be — see
+Derived unit costs (rough): fill ≈ 0.8 cycle/px, LUT mask ≈ 9 cycles/px, blend
+mask ≈ 17 cycles/px, ≈ 40 cycles per item crossing a line (`cost::CostModel`
+predicts these three scenes within ~10 %). The mask figure is higher than it needs to be — see
 "Known cheap wins".
 
 ## Architecture
@@ -83,9 +84,41 @@ mask ≈ 20 cycles/px. The mask figure is higher than it needs to be — see
   class) can be driven by diffing lists and sending only dirty lines.
   Designing the seam is in scope; implementing that backend is not yet.
   (2026-09-17)
-* **`no_std`, no heap on the target; memory statically defined.** Put limits
-  on what can happen at runtime so capacities are derived or declared, not
-  over-allocated. (2026-09-17) — *mechanism still open, see below.*
+* **`no_std`, no heap on the target; capacities declared, embassy-arena
+  style.** (2026-09-17) The element tree is built into fixed arenas owned by
+  `Ui<NODES, TEXT, HITS>`; display lists are `DisplayList<ITEMS, GLYPHS>`. The
+  application picks the numbers; every rebuild returns a `BuildReport` of what
+  it used, overflow drops elements and says so, and the host tooling is where
+  the numbers get verified (next to the cost model, which needs the same
+  screen coverage anyway).
+  *Rejected — type-level views with compile-time-derived capacities*
+  (`impl View`, tuples, `either`/`select!`): it is the only design that makes
+  memory a compile-time fact, but (a) the line-time budget can only ever be
+  verified by running screens, so it guarantees the less dangerous half of the
+  resource problem; (b) its authoring tax (no heterogeneous arrays, `match`
+  arms needing macros, trait-bound errors) is paid on every UI ever written,
+  while sizing is paid once per product; (c) data-driven screens are awkward as
+  types; (d) it monomorphizes layout/emit per screen on a size-optimized
+  target. Embassy made the same trade: type-derived task storage on nightly,
+  a declared arena on stable — and the arena is fine because its failure is
+  loud. It stays available as a front end over the same core if a product
+  ever needs the hard guarantee.
+* **`El` is a handle; builders are free functions; the tree being built is
+  ambient.** (2026-09-17, Claude's call — flagged for Ben's review.) `El` is a
+  2-byte index into the tree under construction, so authoring code has no
+  lifetimes and no context parameter and reads like damascene's:
+  `column([h1("Oven 1"), button("+").key("inc")])`. The cost is one piece of
+  ambient state (`current.rs`): a pointer that is set only inside
+  `Ui::rebuild`, thread-local on `std`, a single claimed global on the target;
+  building outside a rebuild, nesting rebuilds, or rebuilding from two cores
+  panics. *Rejected:* explicit `cx: &BuildCx<'a>` returning `El<'a>` — every
+  helper function grows a lifetime and a parameter, and modifiers on a handle
+  still need the tree. If the ambient state ever bites, switching is a
+  mechanical API change; nothing below the builders depends on it.
+* **Known-background tracking is automatic.** Emit carries the nearest
+  ancestor fill down the tree, so text and rounded corners become LUT masks
+  without the author knowing the distinction exists; later children of a
+  `stack` blend. (2026-09-17)
 * **License: MIT OR Apache-2.0**, matching damascene. (2026-09-17)
 * **Cost model as a first-class verifier.** Per-line cost is computable from
   the list (fill px, mask px, items crossing). The simulator/CI fails a screen
@@ -123,8 +156,15 @@ mask ≈ 20 cycles/px. The mask figure is higher than it needs to be — see
   landscape UIs, rare in rotated ones).
 * The scan-out ring can likely shrink from 32 lines to ~8.
 
-## Open
+## Open / next
 
-* **How memory becomes static** (tree representation): see discussion in the
-  project log — type-level views with compile-time capacity vs. a bump arena
-  with declared bounds verified by tooling.
+* Declared bounds on dynamic content (`max_chars`, `each(..).max(n)`) and a
+  checker that prices each tree *shape* at its bounds, so capacity coverage is
+  "every page and branch once", not "every state".
+* Node is ~90 bytes (256 nodes = 23 KB); pack it.
+* Persistent per-key widget state table (scroll offsets, animation phase).
+* Text wrapping; scale factor (layout is in physical px today); rotations
+  other than 90°.
+* `scanwright-sim` (window), `scanwright-bake`, `scanwright-rp2350`, the
+  line-sink trait.
+* Recalibrate `CostModel::CORTEX_M33` against hardware after the text-run change.

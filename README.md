@@ -14,12 +14,13 @@ Sibling in spirit to [damascene](https://github.com/computer-whisperer/damascene
 (agent-friendly declarative authoring), sharing vocabulary but no code — the
 constraints are radically different.
 
-Status: early. `scanwright-core` (display list + scanline rasterizer + baked
-fonts) is proven on hardware; see [docs/DESIGN.md](docs/DESIGN.md) for the
+Status: early. `scanwright-core` (display list, scanline rasterizer, baked
+fonts, cost model) is proven on hardware; `scanwright-ui` (El vocabulary, fixed
+arenas, layout, touch events) renders the oven home page on the host; see [docs/DESIGN.md](docs/DESIGN.md) for the
 measurements, the rulings so far, and what is still open.
 
 ```sh
-cargo test --release      # renders the demo scenes to target/scene-*.png
+cargo test --release      # renders target/scene-*.png and target/ui-oven-home.png
 ```
 
 ## License
