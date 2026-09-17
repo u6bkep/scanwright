@@ -33,6 +33,10 @@ fn main() {
 
     let mut blob: Vec<u8> = Vec::new();
     let mut src = String::new();
+    // Real-time glyph table (mask size + atlas offset), indexed globally
+    // across all fonts; display-list text runs refer to glyphs by this index.
+    let mut infos = String::new();
+    let mut n_glyphs = 0usize;
     for spec in SPECS {
         let data = fs::read(dir.join(spec.file)).unwrap();
         let font = fontdue::Font::from_bytes(data, fontdue::FontSettings::default()).unwrap();
@@ -69,20 +73,24 @@ fn main() {
             // `top`: logical rows from the baseline up to the bitmap's top row.
             writeln!(
                 src,
-                "    Glyph {{ ch: {:?}, advance_64: {}, left: {}, top: {}, w: {}, h: {}, offset: {} }},",
+                "    Glyph {{ ch: {:?}, advance_64: {}, left: {}, top: {}, w: {}, h: {}, index: {} }},",
                 ch,
                 (m.advance_width * 64.0).round() as u16,
                 m.xmin,
                 m.ymin + h as i32,
                 w,
                 h,
-                offset
+                n_glyphs
             )
             .unwrap();
+            writeln!(infos, "    GlyphInfo {{ mask_w: {h}, mask_h: {w}, offset: {offset} }},").unwrap();
+            n_glyphs += 1;
         }
         writeln!(src, "] }};").unwrap();
     }
     writeln!(src, "pub const ATLAS_LEN: usize = {};", blob.len()).unwrap();
+    writeln!(src, "pub const GLYPH_COUNT: usize = {n_glyphs};").unwrap();
+    writeln!(src, "const GLYPH_INFO_INIT: [GlyphInfo; GLYPH_COUNT] = [\n{infos}];").unwrap();
     fs::write(out.join("atlas.bin"), &blob).unwrap();
     fs::write(out.join("atlas.rs"), src).unwrap();
 }

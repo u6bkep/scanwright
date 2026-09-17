@@ -6,7 +6,7 @@ use core::fmt::Write as _;
 use crate::{
     font::{BOLD_24, BOLD_72, REGULAR_18, REGULAR_21},
     hex,
-    list::DisplayList,
+    list::{DisplayList, ListBuilder, ListUsage},
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -76,17 +76,23 @@ macro_rules! fmt {
 }
 
 /// Build `scene` into `list`. `tick` animates the dynamic parts.
-pub fn build(list: &mut DisplayList, panel_w: u16, panel_h: u16, scene: Scene, tick: u32) {
-    list.begin(panel_w, panel_h, BG);
+pub fn build<const I: usize, const G: usize>(
+    list: &mut DisplayList<I, G>,
+    panel_w: u16,
+    panel_h: u16,
+    scene: Scene,
+    tick: u32,
+) -> ListUsage {
+    let mut b = list.begin(panel_w, panel_h, BG);
     match scene {
-        Scene::Home => home(list, tick),
-        Scene::DenseText => dense(list, tick, Some(BG)),
-        Scene::DenseBlend => dense(list, tick, None),
+        Scene::Home => home(&mut b, tick),
+        Scene::DenseText => dense(&mut b, tick, Some(BG)),
+        Scene::DenseBlend => dense(&mut b, tick, None),
     }
-    list.finish();
+    b.finish()
 }
 
-fn home(l: &mut DisplayList, tick: u32) {
+fn home(l: &mut ListBuilder<'_>, tick: u32) {
     let (w, h) = l.logical_size();
 
     // Status bar.
@@ -143,7 +149,7 @@ fn home(l: &mut DisplayList, tick: u32) {
     }
 }
 
-fn dense(l: &mut DisplayList, tick: u32, bg: Option<u16>) {
+fn dense(l: &mut ListBuilder<'_>, tick: u32, bg: Option<u16>) {
     let (w, h) = l.logical_size();
     l.rect(0, 0, w, 48, BAR);
     let title = fmt!("DENSE TEXT  frame {}", tick);

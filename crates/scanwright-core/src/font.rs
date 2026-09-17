@@ -1,5 +1,17 @@
 //! Build-time baked fonts (see `build.rs`): 4-bit coverage masks, pre-rotated
 //! into panel space.
+//!
+//! Two views of the same glyphs:
+//!
+//! * [`Font`] / [`Glyph`] — metrics for the soft side (measuring, laying out,
+//!   emitting). May live in flash.
+//! * [`FontSet`] — what the rasterizer reads on the real-time path: the mask
+//!   atlas and a compact [`GlyphInfo`] table. In SRAM on bare metal (feature
+//!   `atlas-in-ram`).
+//!
+//! Today both are baked inside this crate; the split-out bake crate will let
+//! the application declare them, which is why lists carry a [`FontSet`]
+//! rather than the rasterizer reaching for statics.
 
 /// One baked glyph. `w`/`h` are the bitmap's **logical** (unrotated) size; the
 /// stored mask is `h` wide and `w` tall.
@@ -14,8 +26,8 @@ pub struct Glyph {
     pub top: i32,
     pub w: usize,
     pub h: usize,
-    /// Byte offset of the mask in [`ATLAS`].
-    pub offset: usize,
+    /// Index into the [`FontSet`]'s glyph table.
+    pub index: u16,
 }
 
 pub struct Font {
@@ -43,14 +55,46 @@ impl Font {
             .sum();
         ((adv + 32) / 64) as i32
     }
+
+    /// Distance between baselines.
+    pub fn line_height(&self) -> i32 {
+        i32::from(self.ascent) + i32::from(self.descent)
+    }
+}
+
+/// Real-time glyph record: panel-space mask size and where it is in the atlas.
+/// Rows are `(mask_w + 1) / 2` bytes, two pixels per byte, low nibble first.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct GlyphInfo {
+    pub mask_w: u8,
+    pub mask_h: u8,
+    pub offset: u32,
+}
+
+/// Everything the rasterizer needs to draw text.
+#[derive(Clone, Copy)]
+pub struct FontSet {
+    pub atlas: &'static [u8],
+    pub glyphs: &'static [GlyphInfo],
 }
 
 include!(concat!(env!("OUT_DIR"), "/atlas.rs"));
 
-/// The glyph masks. In SRAM on bare metal (feature `atlas-in-ram`): the
-/// rasterizer reads this on the real-time path.
 #[cfg_attr(
     all(target_os = "none", feature = "atlas-in-ram"),
     unsafe(link_section = ".data.scanwright_atlas")
 )]
 pub static ATLAS: [u8; ATLAS_LEN] = *include_bytes!(concat!(env!("OUT_DIR"), "/atlas.bin"));
+
+#[cfg_attr(
+    all(target_os = "none", feature = "atlas-in-ram"),
+    unsafe(link_section = ".data.scanwright_glyphs")
+)]
+pub static GLYPH_INFO: [GlyphInfo; GLYPH_COUNT] = GLYPH_INFO_INIT;
+
+/// The fonts baked into this crate.
+pub const BUILTIN: FontSet = FontSet {
+    atlas: &ATLAS,
+    glyphs: &GLYPH_INFO,
+};

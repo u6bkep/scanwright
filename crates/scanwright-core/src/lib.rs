@@ -27,6 +27,7 @@
 
 #![no_std]
 
+pub mod cost;
 pub mod demo;
 pub mod font;
 pub mod list;

@@ -1,5 +1,5 @@
-//! The hard-real-time side: expand a [`DisplayList`] to pixels, one panel line
-//! per call.
+//! The hard-real-time side: expand a list ([`ListView`]) to pixels, one panel
+//! line per call.
 //!
 //! Painter's algorithm over the items that cross the line, kept in an active
 //! list sorted by z (= item index). Lines must be requested in order — the
@@ -12,7 +12,10 @@
 //! recognition cannot turn them into calls — check the disassembly after
 //! touching them), no panics, no bounds checks.
 
-use crate::list::{DisplayList, Item, OP_FILL, OP_MASK_LUT};
+use crate::{
+    font::GlyphInfo,
+    list::{GlyphRef, Item, ListView, OP_FILL, OP_MASK_LUT, OP_RUN_LUT, POOL_ATLAS},
+};
 
 /// Most items that may cross one line. Excess items are not drawn (counted in
 /// [`Raster::overflows`]).
@@ -24,6 +27,8 @@ pub struct Raster {
     n_active: u16,
     /// Item indices crossing the current line, ascending (= z order).
     active: [u16; MAX_ACTIVE],
+    /// Per active text run: its first glyph ref that has not ended yet.
+    cursor: [u16; MAX_ACTIVE],
     overflows: u32,
     peak_active: u16,
 }
@@ -34,6 +39,7 @@ impl Raster {
             next: 0,
             n_active: 0,
             active: [0; MAX_ACTIVE],
+            cursor: [0; MAX_ACTIVE],
             overflows: 0,
             peak_active: 0,
         }
@@ -62,22 +68,24 @@ impl Raster {
     ///
     /// `out` must be valid for `panel_w` pixel writes when `draw` is set;
     /// lines must be requested in increasing order after [`Self::begin_frame`];
-    /// `list` must be sealed ([`DisplayList::finish`]) and not mutated while a
-    /// frame is in progress.
+    /// `list` must come from a sealed list ([`crate::list::ListBuilder::finish`])
+    /// that is not rebuilt while a frame is in progress.
     #[cfg_attr(target_os = "none", unsafe(link_section = ".data.ram_func"))]
     #[inline(never)]
-    pub unsafe fn line(&mut self, list: &DisplayList, y: u16, out: *mut u16, draw: bool) {
+    pub unsafe fn line(&mut self, list: &ListView<'_>, y: u16, out: *mut u16, draw: bool) {
         unsafe {
             let items: *const Item = list.items.as_ptr();
             let order: *const u16 = list.order.as_ptr();
             let active: *mut u16 = self.active.as_mut_ptr();
-            let n_items = list.n;
+            let cursor: *mut u16 = self.cursor.as_mut_ptr();
+            let n_items = list.items.len() as u16;
 
             // Activate items starting on or before this line.
             let mut n = usize::from(self.n_active);
             while self.next < n_items {
                 let idx = *order.add(usize::from(self.next));
-                if (*items.add(usize::from(idx))).y0 > y {
+                let it = &*items.add(usize::from(idx));
+                if it.y0 > y {
                     break;
                 }
                 self.next += 1;
@@ -93,9 +101,11 @@ impl Raster {
                         break;
                     }
                     core::ptr::write_volatile(active.add(k), prev);
+                    core::ptr::write_volatile(cursor.add(k), core::ptr::read_volatile(cursor.add(k - 1)));
                     k -= 1;
                 }
                 core::ptr::write_volatile(active.add(k), idx);
+                core::ptr::write_volatile(cursor.add(k), it.a as u16);
                 n += 1;
             }
             if n as u16 > self.peak_active {
@@ -107,37 +117,90 @@ impl Raster {
             let mut i = 0usize;
             while i < n {
                 let idx = *active.add(i);
+                let mut cur = *cursor.add(i);
                 i += 1;
                 let it = &*items.add(usize::from(idx));
                 if it.y1 <= y {
                     continue;
                 }
-                core::ptr::write_volatile(active.add(keep), idx);
-                keep += 1;
-                if !draw {
-                    continue;
-                }
-                let x0 = usize::from(it.x0);
-                let len = usize::from(it.x1) - x0;
-                let dst = out.add(x0);
-                if it.op == OP_FILL {
-                    fill16(dst, len, it.color);
-                } else {
-                    let row = list
-                        .pool_base(it.pool)
-                        .add(it.mask_off as usize)
-                        .add((usize::from(y - it.y0) + usize::from(it.my0)) * usize::from(it.stride));
-                    let mx0 = usize::from(it.mx0);
-                    if it.op == OP_MASK_LUT {
-                        let lut = list.luts.as_ptr().add(usize::from(it.color)) as *const u16;
-                        mask_row::<false>(dst, row, mx0, len, lut, 0);
+                if it.op >= OP_RUN_LUT {
+                    cur = run_line(list, it, cur, y, out, draw);
+                } else if draw {
+                    let x0 = usize::from(it.x0);
+                    let len = usize::from(it.x1) - x0;
+                    let dst = out.add(x0);
+                    if it.op == OP_FILL {
+                        fill16(dst, len, it.color);
                     } else {
-                        mask_row::<true>(dst, row, mx0, len, core::ptr::null(), crate::spread(it.color));
+                        let base = if it.pool == POOL_ATLAS { list.atlas.as_ptr() } else { list.pool.as_ptr() };
+                        let row = base
+                            .add(it.a as usize)
+                            .add((usize::from(y - it.y0) + usize::from(it.my0)) * usize::from(it.n));
+                        let mx0 = usize::from(it.mx0);
+                        if it.op == OP_MASK_LUT {
+                            let lut = list.luts.as_ptr().add(usize::from(it.color)) as *const u16;
+                            mask_row::<false>(dst, row, mx0, len, lut, 0);
+                        } else {
+                            mask_row::<true>(dst, row, mx0, len, core::ptr::null(), crate::spread(it.color));
+                        }
                     }
                 }
+                core::ptr::write_volatile(active.add(keep), idx);
+                core::ptr::write_volatile(cursor.add(keep), cur);
+                keep += 1;
             }
             self.n_active = keep as u16;
         }
+    }
+}
+
+/// One line of a text run: advance the cursor past glyphs that ended, then
+/// draw every glyph that has started (they are sorted by first line). Returns
+/// the new cursor.
+#[inline(always)]
+unsafe fn run_line(list: &ListView<'_>, it: &Item, mut cur: u16, y: u16, out: *mut u16, draw: bool) -> u16 {
+    unsafe {
+        let refs: *const GlyphRef = list.glyphs.as_ptr();
+        let infos: *const GlyphInfo = list.glyph_info.as_ptr();
+        let end = it.a as u16 + it.n;
+        while cur < end {
+            let r = &*refs.add(usize::from(cur));
+            if r.y0 + u16::from((*infos.add(usize::from(r.glyph))).mask_h) > y {
+                break;
+            }
+            cur += 1;
+        }
+        if !draw {
+            return cur;
+        }
+        let lut = if it.op == OP_RUN_LUT {
+            list.luts.as_ptr().add(usize::from(it.color)) as *const u16
+        } else {
+            core::ptr::null()
+        };
+        let fg = crate::spread(it.color);
+        let mut k = cur;
+        while k < end {
+            let r = &*refs.add(usize::from(k));
+            k += 1;
+            if r.y0 > y {
+                break;
+            }
+            let info = &*infos.add(usize::from(r.glyph));
+            let dy = usize::from(y - r.y0);
+            if dy >= usize::from(info.mask_h) {
+                continue;
+            }
+            let w = usize::from(info.mask_w);
+            let row = list.atlas.as_ptr().add(info.offset as usize + dy * w.div_ceil(2));
+            let dst = out.add(usize::from(r.x0));
+            if lut.is_null() {
+                mask_row::<true>(dst, row, 0, w, lut, fg);
+            } else {
+                mask_row::<false>(dst, row, 0, w, lut, fg);
+            }
+        }
+        cur
     }
 }
 
