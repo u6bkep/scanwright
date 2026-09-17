@@ -51,10 +51,35 @@ Identical under a 200 Hz x 1200 B ping flood plus an HTTP fetch loop. Frame
 busy time varies < 0.2 %. The blend stress case exceeds the line budget on its
 worst lines and the ring absorbs it (min lead 26 of 30 lines).
 
-Derived unit costs (rough): fill ≈ 0.8 cycle/px, LUT mask ≈ 9 cycles/px, blend
-mask ≈ 17 cycles/px, ≈ 40 cycles per item crossing a line (`cost::CostModel`
-predicts these three scenes within ~10 %). The mask figure is higher than it needs to be — see
-"Known cheap wins".
+### After text runs + the UI layer (same day, same hardware)
+
+| scene | list | worst line | core-1 busy / frame | build (core 0) | underruns |
+|---|---|---|---|---|---|
+| oven home page, authored in `scanwright-ui` | 69 items + 152 glyphs | 19 µs | 5.3 ms (28 %) | 1.7 ms (build + layout + emit) | 0 |
+| full-screen text, LUT | 32 items + 1162 glyphs | 36 µs | 11.8 ms (63 %) | 1.4 ms | 0 |
+| full-screen text, blend | 32 items + 1162 glyphs | 52 µs | 16.9 ms (91 %) | 1.4 ms | 0 (min lead 23/30) |
+
+**Text runs bought memory and cost time.** One item + a 12-byte ref per glyph
+(vs a 20-byte item per glyph) roughly halves text-heavy lists and shrinks the
+active set, but the text-heavy scenes got ~25 % slower on core 1 than the
+per-glyph-item spike (9.2 -> 11.8 ms, 13.9 -> 16.9 ms). Three variants were
+measured, none recovered it:
+
+* 6-byte refs indexing the font's glyph table: worst (12.7 / 17.5 ms).
+* self-contained 12-byte refs, all pixel loops inlined: 11.5 / 18.0 ms and the
+  blend scene **underran** (register spills inside the blend loop).
+* all pixel loops out of line: 12.5 / 17.2 ms — each call costs ~20 cycles per
+  item per line, which hurts fills and LUT rows more than tidy codegen helps.
+* **kept:** fill + LUT inline, blend out of line: 11.8 / 16.9 ms.
+
+The remaining gap is per-run, per-line overhead (a run is active on every
+line it spans, including the gaps between its glyphs, and its cursor state
+spills). This wants a cycle-accurate harness (a Cortex-M33 bench binary, DWT
+counts per primitive), not more flash-and-look. Ordinary UI pages are
+nowhere near the limit, so it is parked, not forgotten.
+
+`cost::CostModel::CORTEX_M33` is calibrated to this table: whole-frame load
+within +/-5 % (slightly conservative), worst line within ~15 %.
 
 ## Architecture
 
@@ -148,8 +173,6 @@ predicts these three scenes within ~10 %). The mask figure is higher than it nee
 
 ### Known cheap wins (not taken yet)
 
-* Text-run items instead of one 20-byte item per glyph (~3x smaller lists,
-  far less active-list churn).
 * Byte -> two-pixel LUT, or run-length glyph encoding (half of a glyph box is
   empty, a third is solid).
 * Line repeat when the active set is unchanged and all fills (common in
@@ -167,4 +190,8 @@ predicts these three scenes within ~10 %). The mask figure is higher than it nee
   other than 90°.
 * `scanwright-sim` (window), `scanwright-bake`, `scanwright-rp2350`, the
   line-sink trait.
-* Recalibrate `CostModel::CORTEX_M33` against hardware after the text-run change.
+* Rasterizer micro-optimisation with a cycle-accurate bench (see the text-run
+  measurements above); byte -> two-pixel LUT; run-length glyph rows.
+* `Ui` and `DisplayList` statics land in `.data` (non-zero initialisers: the
+  `NONE` link sentinel, the font pointers) — ~70 KB of flash image and boot
+  copy for nothing. Make their `new()` all-zero.

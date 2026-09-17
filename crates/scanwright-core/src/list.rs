@@ -17,11 +17,16 @@
 //!
 //! # Text
 //!
-//! A text run is **one** item plus a 6-byte [`GlyphRef`] per glyph (sorted by
-//! first panel line); the rasterizer walks the run with a cursor. Glyphs that
-//! are partly clipped fall back to individual mask items.
+//! A text run is **one** item plus a 12-byte, self-contained [`GlyphRef`] per
+//! glyph (sorted by first panel line); the rasterizer walks the run with a
+//! cursor. Glyphs that are partly clipped fall back to individual mask items.
+//!
+//! (Measured 2026-09-17: a 6-byte ref that pointed into the font's glyph table
+//! cost ~35 % more rasterizer time than one 20-byte item per glyph — two
+//! dependent loads per glyph per line. Self-contained refs keep the memory win
+//! without the indirection.)
 
-use crate::font::{Font, FontSet, GlyphInfo};
+use crate::font::{Font, FontSet};
 
 pub const MAX_LUTS: usize = 24;
 /// List-local mask storage (rounded-rect corners).
@@ -82,14 +87,17 @@ impl Item {
     };
 }
 
-/// One glyph of a text run: unclipped, top-left at panel `(x0, y0)`, size and
-/// mask from the font set's [`GlyphInfo`] table.
+/// One glyph of a text run: unclipped, top-left at panel `(x0, y0)`, with its
+/// mask size and atlas offset copied in so the rasterizer needs nothing else.
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct GlyphRef {
     pub x0: u16,
     pub y0: u16,
-    pub glyph: u16,
+    pub mask_w: u8,
+    pub mask_h: u8,
+    _pad: u16,
+    pub offset: u32,
 }
 
 /// Capacity-independent part of a list.
@@ -141,7 +149,7 @@ impl<const ITEMS: usize, const GLYPHS: usize> DisplayList<ITEMS, GLYPHS> {
             },
             items: [Item::EMPTY; ITEMS],
             order: [0; ITEMS],
-            glyphs: [GlyphRef { x0: 0, y0: 0, glyph: 0 }; GLYPHS],
+            glyphs: [GlyphRef { x0: 0, y0: 0, mask_w: 0, mask_h: 0, _pad: 0, offset: 0 }; GLYPHS],
         }
     }
 
@@ -180,7 +188,6 @@ impl<const ITEMS: usize, const GLYPHS: usize> DisplayList<ITEMS, GLYPHS> {
             luts: &h.luts,
             pool: &h.pool,
             atlas: h.fonts.atlas,
-            glyph_info: h.fonts.glyphs,
         }
     }
 
@@ -211,7 +218,6 @@ pub struct ListView<'a> {
     pub luts: &'a [[u16; 16]],
     pub pool: &'a [u8],
     pub atlas: &'a [u8],
-    pub glyph_info: &'a [GlyphInfo],
 }
 
 /// Write handle for one build of a list. Only [`Self::finish`] seals the
@@ -312,9 +318,17 @@ impl ListBuilder<'_> {
             }
             let inside = x0 >= 0 && y0 >= 0 && x1 <= pw && y1 <= ph;
             let n = usize::from(self.head.n_glyphs);
+            let info = self.head.fonts.glyphs[usize::from(g.index)];
             if inside && n < self.glyphs.len() {
                 // Keep the run sorted by first line (insertion; nearly sorted).
-                let r = GlyphRef { x0: x0 as u16, y0: y0 as u16, glyph: g.index };
+                let r = GlyphRef {
+                    x0: x0 as u16,
+                    y0: y0 as u16,
+                    mask_w: info.mask_w,
+                    mask_h: info.mask_h,
+                    _pad: 0,
+                    offset: info.offset,
+                };
                 let mut k = n;
                 while k > start && self.glyphs[k - 1].y0 > r.y0 {
                     self.glyphs[k] = self.glyphs[k - 1];
@@ -330,7 +344,6 @@ impl ListBuilder<'_> {
                 self.head.dropped += 1;
             } else {
                 // Partly off-panel: an individually clipped mask item.
-                let info = self.head.fonts.glyphs[usize::from(g.index)];
                 let stride = u16::from(info.mask_w).div_ceil(2);
                 let op = if lut { OP_MASK_LUT } else { OP_MASK_BLEND };
                 self.push_mask(x0, y0, g.h as i32, g.w as i32, POOL_ATLAS, info.offset, stride, op, c);

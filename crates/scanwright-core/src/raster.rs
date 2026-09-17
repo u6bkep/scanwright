@@ -12,10 +12,7 @@
 //! recognition cannot turn them into calls — check the disassembly after
 //! touching them), no panics, no bounds checks.
 
-use crate::{
-    font::GlyphInfo,
-    list::{GlyphRef, Item, ListView, OP_FILL, OP_MASK_LUT, OP_RUN_LUT, POOL_ATLAS},
-};
+use crate::list::{GlyphRef, Item, ListView, OP_FILL, OP_MASK_LUT, OP_RUN_LUT, POOL_ATLAS};
 
 /// Most items that may cross one line. Excess items are not drawn (counted in
 /// [`Raster::overflows`]).
@@ -139,9 +136,9 @@ impl Raster {
                         let mx0 = usize::from(it.mx0);
                         if it.op == OP_MASK_LUT {
                             let lut = list.luts.as_ptr().add(usize::from(it.color)) as *const u16;
-                            mask_row::<false>(dst, row, mx0, len, lut, 0);
+                            mask_row_lut(dst, row, mx0, len, lut);
                         } else {
-                            mask_row::<true>(dst, row, mx0, len, core::ptr::null(), crate::spread(it.color));
+                            mask_row_blend(dst, row, mx0, len, crate::spread(it.color));
                         }
                     }
                 }
@@ -161,11 +158,10 @@ impl Raster {
 unsafe fn run_line(list: &ListView<'_>, it: &Item, mut cur: u16, y: u16, out: *mut u16, draw: bool) -> u16 {
     unsafe {
         let refs: *const GlyphRef = list.glyphs.as_ptr();
-        let infos: *const GlyphInfo = list.glyph_info.as_ptr();
         let end = it.a as u16 + it.n;
         while cur < end {
             let r = &*refs.add(usize::from(cur));
-            if r.y0 + u16::from((*infos.add(usize::from(r.glyph))).mask_h) > y {
+            if r.y0 + u16::from(r.mask_h) > y {
                 break;
             }
             cur += 1;
@@ -173,6 +169,7 @@ unsafe fn run_line(list: &ListView<'_>, it: &Item, mut cur: u16, y: u16, out: *m
         if !draw {
             return cur;
         }
+        let atlas = list.atlas.as_ptr();
         let lut = if it.op == OP_RUN_LUT {
             list.luts.as_ptr().add(usize::from(it.color)) as *const u16
         } else {
@@ -186,18 +183,17 @@ unsafe fn run_line(list: &ListView<'_>, it: &Item, mut cur: u16, y: u16, out: *m
             if r.y0 > y {
                 break;
             }
-            let info = &*infos.add(usize::from(r.glyph));
             let dy = usize::from(y - r.y0);
-            if dy >= usize::from(info.mask_h) {
+            if dy >= usize::from(r.mask_h) {
                 continue;
             }
-            let w = usize::from(info.mask_w);
-            let row = list.atlas.as_ptr().add(info.offset as usize + dy * w.div_ceil(2));
+            let w = usize::from(r.mask_w);
+            let row = atlas.add(r.offset as usize + dy * w.div_ceil(2));
             let dst = out.add(usize::from(r.x0));
             if lut.is_null() {
-                mask_row::<true>(dst, row, 0, w, lut, fg);
+                mask_row_blend(dst, row, 0, w, fg);
             } else {
-                mask_row::<false>(dst, row, 0, w, lut, fg);
+                mask_row_lut(dst, row, 0, w, lut);
             }
         }
         cur
@@ -260,6 +256,25 @@ unsafe fn put<const BLEND: bool>(p: *mut u16, a: u32, lut: *const u16, fg: u32) 
             p.write(*lut.add(a as usize));
         }
     }
+}
+
+/// One mask row through a colour LUT.
+#[inline(always)]
+unsafe fn mask_row_lut(out: *mut u16, row: *const u8, mx0: usize, n: usize, lut: *const u16) {
+    unsafe { mask_row::<false>(out, row, mx0, n, lut, 0) }
+}
+
+/// One mask row blended in spread colour `fg` over the line.
+///
+/// Deliberately *not* inlined into `line` (measured 2026-09-17, Cortex-M33):
+/// the blend body is big enough that, inlined next to the run/cursor logic,
+/// it spills to the stack (-5 % frame time out of line on a blend-heavy
+/// screen). The fill and LUT loops are the opposite: they are tiny, and a
+/// call costs ~20 cycles per item per line (+10 % on a fill-heavy screen).
+#[cfg_attr(target_os = "none", unsafe(link_section = ".data.ram_func"))]
+#[inline(never)]
+unsafe fn mask_row_blend(out: *mut u16, row: *const u8, mx0: usize, n: usize, fg: u32) {
+    unsafe { mask_row::<true>(out, row, mx0, n, core::ptr::null(), fg) }
 }
 
 /// One mask row: `n` pixels starting at mask column `mx0` (two 4-bit

@@ -41,8 +41,8 @@ impl CostModel {
         lut_px_x16: 142,
         blend_px_x16: 270,
         item_x16: 40 * 16,
-        glyph_x16: 40 * 16,
-        line_x16: 150 * 16,
+        glyph_x16: 80 * 16,
+        line_x16: 250 * 16,
     };
 
     pub fn cycles(&self, w: &LineWork) -> u32 {
@@ -69,13 +69,12 @@ pub fn line_work(list: &ListView<'_>, y: u16) -> LineWork {
             OP_RUN_LUT | OP_RUN_BLEND => {
                 let refs = &list.glyphs[it.a as usize..it.a as usize + usize::from(it.n)];
                 for r in refs {
-                    let info = &list.glyph_info[usize::from(r.glyph)];
-                    if r.y0 <= y && y < r.y0 + u16::from(info.mask_h) {
+                    if r.y0 <= y && y < r.y0 + u16::from(r.mask_h) {
                         w.glyphs += 1;
                         if it.op == OP_RUN_LUT {
-                            w.lut_px += u32::from(info.mask_w);
+                            w.lut_px += u32::from(r.mask_w);
                         } else {
-                            w.blend_px += u32::from(info.mask_w);
+                            w.blend_px += u32::from(r.mask_w);
                         }
                     }
                 }
