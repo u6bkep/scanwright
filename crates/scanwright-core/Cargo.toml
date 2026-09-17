@@ -1,0 +1,19 @@
+[package]
+name = "scanwright-core"
+description = "Display-list scanline rasterizer for racing the beam on framebuffer-less displays"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+publish = false
+
+[features]
+default = ["atlas-in-ram"]
+# Place the baked glyph atlas in `.data` (SRAM) on bare-metal targets, so the
+# real-time rasterizer never touches the flash XIP path. Off = atlas in flash.
+atlas-in-ram = []
+
+[build-dependencies]
+fontdue = "0.9"
+
+[dev-dependencies]
+png = "0.17"
