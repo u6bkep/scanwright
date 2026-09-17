@@ -21,3 +21,9 @@ measurements, the rulings so far, and what is still open.
 ```sh
 cargo test --release      # renders the demo scenes to target/scene-*.png
 ```
+
+## License
+
+Dual-licensed under MIT or Apache-2.0, at your option (matching damascene).
+The bundled Roboto fonts are Apache-2.0; see
+`crates/scanwright-core/fonts/LICENSE-Roboto.txt`.

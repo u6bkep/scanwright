@@ -4,6 +4,8 @@ description = "Display-list scanline rasterizer for racing the beam on framebuff
 edition.workspace = true
 version.workspace = true
 authors.workspace = true
+license.workspace = true
+repository.workspace = true
 publish = false
 
 [features]

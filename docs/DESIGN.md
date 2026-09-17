@@ -86,6 +86,7 @@ mask ≈ 20 cycles/px. The mask figure is higher than it needs to be — see
 * **`no_std`, no heap on the target; memory statically defined.** Put limits
   on what can happen at runtime so capacities are derived or declared, not
   over-allocated. (2026-09-17) — *mechanism still open, see below.*
+* **License: MIT OR Apache-2.0**, matching damascene. (2026-09-17)
 * **Cost model as a first-class verifier.** Per-line cost is computable from
   the list (fill px, mask px, items crossing). The simulator/CI fails a screen
   that exceeds the panel's line budget before it reaches hardware — the
@@ -127,4 +128,3 @@ mask ≈ 20 cycles/px. The mask figure is higher than it needs to be — see
 * **How memory becomes static** (tree representation): see discussion in the
   project log — type-level views with compile-time capacity vs. a bump arena
   with declared bounds verified by tooling.
-* License.
