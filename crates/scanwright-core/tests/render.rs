@@ -132,10 +132,33 @@ fn bench_scenes_build_and_do_distinct_work() {
     for s in &samples {
         println!("{:24} {:?}", s.name, s.work);
     }
-    assert_eq!(samples.len(), 9);
+    assert_eq!(samples.len(), 12);
+    assert!(samples[9].work.moves < 1000 && samples[11].work.moves > 5000, "{:?}", samples[11].work);
+    assert_eq!(samples[9].work.activations, samples[11].work.activations);
+    assert!(samples[10].work.retire_scan < samples[9].work.retire_scan);
     assert_eq!(list.dropped(), 0);
     assert!(samples[0].work.items == H as u32 && samples[0].work.lut_px == 0);
     assert!(samples[4].work.lut_px > 0 && samples[4].work.blend_px == 0);
     assert!(samples[5].work.blend_px > 0 && samples[5].work.lut_px == 0);
     assert!(samples[7].work.runs > 20 * samples[7].work.glyphs / 10, "sparse runs should be mostly idle");
 }
+
+fn fnv(fb: &[u16]) -> u64 {
+    fb.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &p| (h ^ u64::from(p)).wrapping_mul(0x0100_0000_01b3))
+}
+
+/// Pixel-exact regression guard for rasterizer work. The hashes change only
+/// when scene content or the blend maths changes — update them deliberately.
+#[test]
+fn golden_framebuffers() {
+    let got: Vec<(Scene, u64)> = Scene::ALL.iter().map(|&s| (s, fnv(&render(s, 123).2))).collect();
+    println!("{got:#x?}");
+    let want = [GOLDEN_HOME, GOLDEN_DENSE_LUT, GOLDEN_DENSE_BLEND];
+    for ((scene, h), w) in got.iter().zip(want) {
+        assert_eq!(*h, w, "{scene:?}");
+    }
+}
+const GOLDEN_HOME: u64 = 0x2be9_36bc_963a_7ac1;
+const GOLDEN_DENSE_LUT: u64 = 0x606f_d48f_0a43_3966;
+// (A LUT is the blend, tabulated: same pixels.)
+const GOLDEN_DENSE_BLEND: u64 = 0x606f_d48f_0a43_3966;

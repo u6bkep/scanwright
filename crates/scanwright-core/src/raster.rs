@@ -1,31 +1,92 @@
 //! The hard-real-time side: expand a list ([`ListView`]) to pixels, one panel
 //! line per call.
 //!
-//! Painter's algorithm over the items that cross the line, kept in an active
-//! list sorted by z (= item index). Lines must be requested in order — the
-//! active list is maintained incrementally — but a line can be *skipped*
-//! (`draw = false`) at almost no cost, which is how the caller catches up after
-//! missing a deadline instead of dropping the frame.
+//! Painter's algorithm over the items that cross the line. Lines must be
+//! requested in order — the active set is maintained incrementally — but a line
+//! can be *skipped* (`draw = false`) at almost no cost, which is how the caller
+//! catches up after missing a deadline instead of dropping the frame.
+//!
+//! # Why the active set holds records, not indices
+//!
+//! Measured on a Cortex-M33 with `bench::run` (2026-09-17): with an active list
+//! of item *indices*, every item cost ~68 cycles per line it crossed, a text
+//! run 23 more, a glyph 36 more — on a wall of text that bookkeeping was 60 %
+//! of the frame, more than the pixels. Each line re-derived the same things:
+//! index -> item address, clip arithmetic, mask row = base + offset + dy *
+//! stride, glyph lookup, and wrote the list back to compact it.
+//!
+//! So an item is unpacked **once**, when it becomes active, into an [`Active`]
+//! record holding exactly what a line needs — destination, length, a resolved
+//! LUT pointer / colour word, and a *running* mask-row pointer that advances by
+//! one stride per line. Text runs are a tiny state machine over their glyph
+//! refs (the builder guarantees a run's glyphs do not overlap in y). Records
+//! are only compacted on lines where some item actually ends.
 //!
 //! [`Raster::line`] is RAM-resident on bare metal and calls nothing outside
-//! itself: no `memcpy`/`memset` (the loops below are written so LLVM's idiom
-//! recognition cannot turn them into calls — check the disassembly after
-//! touching them), no panics, no bounds checks.
+//! this module: no `memcpy`/`memmove`, no panics, no bounds checks — **check
+//! the disassembly for calls after touching it.** Record moves are word-wise
+//! volatile copies on purpose (see `move_record`).
 
-use crate::list::{GlyphRef, Item, ListView, OP_FILL, OP_MASK_LUT, OP_RUN_LUT, POOL_ATLAS};
+use crate::list::{GlyphRef, Item, ListView, OP_FILL, OP_MASK_BLEND, OP_MASK_LUT, OP_RUN_LUT, POOL_ATLAS};
 
 /// Most items that may cross one line. Excess items are not drawn (counted in
 /// [`Raster::overflows`]).
 pub const MAX_ACTIVE: usize = 192;
 
+/// Everything one line needs to know about an item that crosses it.
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct Active {
+    /// Item index — the z-order sort key.
+    z: u16,
+    /// First line past the item.
+    y1: u16,
+    /// First pixel and pixel count (text runs: of the current glyph).
+    x0: u16,
+    len: u16,
+    op: u8,
+    /// Masks: first mask column (non-zero when clipped).
+    mx0: u8,
+    /// Mask bytes per row (text runs: of the current glyph).
+    stride: u16,
+    /// Fill: the colour doubled into a word. LUT ops: the LUT's address. Blend
+    /// ops: the spread foreground.
+    aux: usize,
+    /// Masks / runs: this line's mask row.
+    row: *const u8,
+    /// Runs: rows left in the current glyph (0 = between glyphs).
+    rows: u16,
+    /// Runs: first line of the glyph at `cur` (`u16::MAX` when none is left).
+    next_y: u16,
+    /// Runs: next glyph ref, and one past the last.
+    cur: u16,
+    end: u16,
+}
+
+const IDLE: Active = Active {
+    z: 0,
+    y1: 0,
+    x0: 0,
+    len: 0,
+    op: OP_FILL,
+    mx0: 0,
+    stride: 0,
+    aux: 0,
+    row: core::ptr::null(),
+    rows: 0,
+    next_y: u16::MAX,
+    cur: 0,
+    end: 0,
+};
+
 pub struct Raster {
     /// Next entry of `list.order` to activate.
     next: u16,
     n_active: u16,
-    /// Item indices crossing the current line, ascending (= z order).
-    active: [u16; MAX_ACTIVE],
-    /// Per active text run: its first glyph ref that has not ended yet.
-    cursor: [u16; MAX_ACTIVE],
+    /// Earliest `y1` among the active records: nothing ends before this line.
+    min_y1: u16,
+    /// Records of the items crossing the current line, ascending z.
+    active: [Active; MAX_ACTIVE],
     overflows: u32,
     peak_active: u16,
 }
@@ -35,8 +96,8 @@ impl Raster {
         Self {
             next: 0,
             n_active: 0,
-            active: [0; MAX_ACTIVE],
-            cursor: [0; MAX_ACTIVE],
+            min_y1: u16::MAX,
+            active: [IDLE; MAX_ACTIVE],
             overflows: 0,
             peak_active: 0,
         }
@@ -47,13 +108,14 @@ impl Raster {
     pub fn begin_frame(&mut self) {
         self.next = 0;
         self.n_active = 0;
+        self.min_y1 = u16::MAX;
     }
 
     pub fn overflows(&self) -> u32 {
         self.overflows
     }
 
-    /// Largest active-list length seen.
+    /// Largest active-set size seen.
     pub fn peak_active(&self) -> u16 {
         self.peak_active
     }
@@ -71,14 +133,34 @@ impl Raster {
     #[inline(never)]
     pub unsafe fn line(&mut self, list: &ListView<'_>, y: u16, out: *mut u16, draw: bool) {
         unsafe {
-            let items: *const Item = list.items.as_ptr();
-            let order: *const u16 = list.order.as_ptr();
-            let active: *mut u16 = self.active.as_mut_ptr();
-            let cursor: *mut u16 = self.cursor.as_mut_ptr();
-            let n_items = list.items.len() as u16;
+            let active: *mut Active = self.active.as_mut_ptr();
+            let mut n = usize::from(self.n_active);
+
+            // Retire finished items — only on lines where one actually ends.
+            if y >= self.min_y1 {
+                let (mut keep, mut min_y1) = (0usize, u16::MAX);
+                let mut i = 0usize;
+                while i < n {
+                    let y1 = (*active.add(i)).y1;
+                    if y1 > y {
+                        if y1 < min_y1 {
+                            min_y1 = y1;
+                        }
+                        if keep != i {
+                            move_record(active.add(keep), active.add(i));
+                        }
+                        keep += 1;
+                    }
+                    i += 1;
+                }
+                n = keep;
+                self.min_y1 = min_y1;
+            }
 
             // Activate items starting on or before this line.
-            let mut n = usize::from(self.n_active);
+            let items: *const Item = list.items.as_ptr();
+            let order: *const u16 = list.order.as_ptr();
+            let n_items = list.items.len() as u16;
             while self.next < n_items {
                 let idx = *order.add(usize::from(self.next));
                 let it = &*items.add(usize::from(idx));
@@ -86,117 +168,131 @@ impl Raster {
                     break;
                 }
                 self.next += 1;
+                if it.y1 <= y {
+                    continue;
+                }
                 if n == MAX_ACTIVE {
                     self.overflows = self.overflows.wrapping_add(1);
                     continue;
                 }
-                // Sorted insert. Volatile so the shift stays a loop (not memmove).
+                // Sorted insert by z, unpacking straight into the slot.
                 let mut k = n;
-                while k > 0 {
-                    let prev = core::ptr::read_volatile(active.add(k - 1));
-                    if prev < idx {
-                        break;
-                    }
-                    core::ptr::write_volatile(active.add(k), prev);
-                    core::ptr::write_volatile(cursor.add(k), core::ptr::read_volatile(cursor.add(k - 1)));
+                while k > 0 && (*active.add(k - 1)).z > idx {
+                    move_record(active.add(k), active.add(k - 1));
                     k -= 1;
                 }
-                core::ptr::write_volatile(active.add(k), idx);
-                core::ptr::write_volatile(cursor.add(k), it.a as u16);
+                let rec = unpack(list, it, idx, y);
+                *active.add(k) = rec;
                 n += 1;
+                if rec.y1 < self.min_y1 {
+                    self.min_y1 = rec.y1;
+                }
             }
+            self.n_active = n as u16;
             if n as u16 > self.peak_active {
                 self.peak_active = n as u16;
             }
 
-            // Draw back to front, dropping finished items as we go.
-            let mut keep = 0usize;
-            let mut i = 0usize;
-            while i < n {
-                let idx = *active.add(i);
-                let mut cur = *cursor.add(i);
-                i += 1;
-                let it = &*items.add(usize::from(idx));
-                if it.y1 <= y {
+            // Draw back to front.
+            let glyphs: *const GlyphRef = list.glyphs.as_ptr();
+            let atlas: *const u8 = list.atlas.as_ptr();
+            let mut rec = active;
+            let end = active.add(n);
+            while rec < end {
+                let r = &mut *rec;
+                rec = rec.add(1);
+                if r.op == OP_FILL {
+                    if draw {
+                        fill16(out.add(usize::from(r.x0)), usize::from(r.len), r.aux as u32);
+                    }
                     continue;
                 }
-                if it.op >= OP_RUN_LUT {
-                    cur = run_line(list, it, cur, y, out, draw);
-                } else if draw {
-                    let x0 = usize::from(it.x0);
-                    let len = usize::from(it.x1) - x0;
-                    let dst = out.add(x0);
-                    if it.op == OP_FILL {
-                        fill16(dst, len, it.color);
+                if r.op >= OP_RUN_LUT && r.rows == 0 {
+                    // Between glyphs: start the next one when the beam reaches it.
+                    if y < r.next_y {
+                        continue;
+                    }
+                    let g = &*glyphs.add(usize::from(r.cur));
+                    let dy = usize::from(y - g.y0);
+                    r.x0 = g.x0;
+                    r.len = u16::from(g.mask_w);
+                    r.stride = (u16::from(g.mask_w) + 1) >> 1;
+                    r.row = atlas.add(g.offset as usize + dy * usize::from(r.stride));
+                    r.rows = u16::from(g.mask_h) - dy as u16;
+                    r.cur += 1;
+                    r.next_y = if r.cur < r.end { (*glyphs.add(usize::from(r.cur))).y0 } else { u16::MAX };
+                }
+                if draw {
+                    let dst = out.add(usize::from(r.x0));
+                    if r.op == OP_MASK_LUT || r.op == OP_RUN_LUT {
+                        mask_row_lut(dst, r.row, usize::from(r.mx0), usize::from(r.len), r.aux as *const u16);
                     } else {
-                        let base = if it.pool == POOL_ATLAS { list.atlas.as_ptr() } else { list.pool.as_ptr() };
-                        let row = base
-                            .add(it.a as usize)
-                            .add((usize::from(y - it.y0) + usize::from(it.my0)) * usize::from(it.n));
-                        let mx0 = usize::from(it.mx0);
-                        if it.op == OP_MASK_LUT {
-                            let lut = list.luts.as_ptr().add(usize::from(it.color)) as *const u16;
-                            mask_row_lut(dst, row, mx0, len, lut);
-                        } else {
-                            mask_row_blend(dst, row, mx0, len, crate::spread(it.color));
-                        }
+                        mask_row_blend(dst, r.row, usize::from(r.mx0), usize::from(r.len), r.aux as u32);
                     }
                 }
-                core::ptr::write_volatile(active.add(keep), idx);
-                core::ptr::write_volatile(cursor.add(keep), cur);
-                keep += 1;
+                r.row = r.row.add(usize::from(r.stride));
+                r.rows = r.rows.wrapping_sub(1);
             }
-            self.n_active = keep as u16;
         }
     }
 }
 
-/// One line of a text run: advance the cursor past glyphs that ended, then
-/// draw every glyph that has started (they are sorted by first line). Returns
-/// the new cursor.
+/// Copy one active record as single-word volatile moves.
+///
+/// Measured 2026-09-17 on the RP2350 (scan-out DMA running): a plain struct
+/// copy compiles to multi-word `ldm`/`stm` and, although ~35 % cheaper on
+/// average, produced rare 25-35 us stalls on random lines; field-wise or
+/// word-wise volatile copies are cycle-for-cycle deterministic. Mechanism not
+/// understood (bus fabric behaviour of multi-beat transfers is the suspect).
+/// Determinism wins: the ring absorbs cost, not surprises.
 #[inline(always)]
-unsafe fn run_line(list: &ListView<'_>, it: &Item, mut cur: u16, y: u16, out: *mut u16, draw: bool) -> u16 {
+unsafe fn move_record(dst: *mut Active, src: *const Active) {
+    const WORDS: usize = core::mem::size_of::<Active>().div_ceil(4);
+    const { assert!(core::mem::size_of::<Active>().is_multiple_of(4) && core::mem::align_of::<Active>() >= 4) };
     unsafe {
-        let refs: *const GlyphRef = list.glyphs.as_ptr();
-        let end = it.a as u16 + it.n;
-        while cur < end {
-            let r = &*refs.add(usize::from(cur));
-            if r.y0 + u16::from(r.mask_h) > y {
-                break;
-            }
-            cur += 1;
+        let (d, s) = (dst as *mut u32, src as *const u32);
+        let mut i = 0;
+        while i < WORDS {
+            core::ptr::write_volatile(d.add(i), core::ptr::read_volatile(s.add(i)));
+            i += 1;
         }
-        if !draw {
-            return cur;
-        }
-        let atlas = list.atlas.as_ptr();
-        let lut = if it.op == OP_RUN_LUT {
-            list.luts.as_ptr().add(usize::from(it.color)) as *const u16
-        } else {
-            core::ptr::null()
+    }
+}
+
+/// Unpack `it` (item number `idx`), which becomes active on line `y`.
+#[inline(always)]
+unsafe fn unpack(list: &ListView<'_>, it: &Item, idx: u16, y: u16) -> Active {
+    unsafe {
+        let mut r = Active {
+            z: idx,
+            y1: it.y1,
+            x0: it.x0,
+            len: it.x1 - it.x0,
+            op: it.op,
+            ..IDLE
         };
-        let fg = crate::spread(it.color);
-        let mut k = cur;
-        while k < end {
-            let r = &*refs.add(usize::from(k));
-            k += 1;
-            if r.y0 > y {
-                break;
-            }
-            let dy = usize::from(y - r.y0);
-            if dy >= usize::from(r.mask_h) {
-                continue;
-            }
-            let w = usize::from(r.mask_w);
-            let row = atlas.add(r.offset as usize + dy * w.div_ceil(2));
-            let dst = out.add(usize::from(r.x0));
-            if lut.is_null() {
-                mask_row_blend(dst, row, 0, w, fg);
+        let lut_or_fg = |lut: bool| {
+            if lut {
+                list.luts.as_ptr().add(usize::from(it.color)) as usize
             } else {
-                mask_row_lut(dst, row, 0, w, lut);
+                crate::spread(it.color) as usize
             }
+        };
+        if it.op == OP_FILL {
+            r.aux = usize::from(it.color) * 0x0001_0001;
+        } else if it.op == OP_MASK_LUT || it.op == OP_MASK_BLEND {
+            let base = if it.pool == POOL_ATLAS { list.atlas.as_ptr() } else { list.pool.as_ptr() };
+            r.mx0 = it.mx0;
+            r.stride = it.n;
+            r.row = base.add(it.a as usize + (usize::from(y - it.y0) + usize::from(it.my0)) * usize::from(it.n));
+            r.aux = lut_or_fg(it.op == OP_MASK_LUT);
+        } else {
+            r.cur = it.a as u16;
+            r.end = it.a as u16 + it.n;
+            r.next_y = (*list.glyphs.as_ptr().add(it.a as usize)).y0;
+            r.aux = lut_or_fg(it.op == OP_RUN_LUT);
         }
-        cur
+        r
     }
 }
 
@@ -208,17 +304,17 @@ impl Default for Raster {
 
 /// Fill `n` pixels. Word stores once aligned.
 #[inline(always)]
-unsafe fn fill16(mut p: *mut u16, mut n: usize, c: u16) {
+unsafe fn fill16(mut p: *mut u16, mut n: usize, w: u32) {
     unsafe {
         if n == 0 {
             return;
         }
+        let c = w as u16;
         if (p as usize) & 2 != 0 {
             p.write(c);
             p = p.add(1);
             n -= 1;
         }
-        let w = u32::from(c) * 0x0001_0001;
         let mut q = p as *mut u32;
         let mut words = n >> 1;
         while words >= 8 {

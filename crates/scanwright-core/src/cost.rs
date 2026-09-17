@@ -22,6 +22,13 @@ pub struct LineWork {
     pub runs: u32,
     /// Glyphs crossing the line.
     pub glyphs: u32,
+    /// Items that become active on this line.
+    pub activations: u32,
+    /// Active records moved on this line: shifted up by a sorted insert, or
+    /// down when an item below them retires.
+    pub moves: u32,
+    /// Records scanned by the retire pass (runs only on lines where an item ends).
+    pub retire_scan: u32,
 }
 
 impl LineWork {
@@ -32,6 +39,9 @@ impl LineWork {
         self.items += o.items;
         self.runs += o.runs;
         self.glyphs += o.glyphs;
+        self.activations += o.activations;
+        self.moves += o.moves;
+        self.retire_scan += o.retire_scan;
     }
 }
 
@@ -41,41 +51,77 @@ pub struct CostModel {
     pub fill_px_x16: u32,
     pub lut_px_x16: u32,
     pub blend_px_x16: u32,
+    /// Per non-run item crossing the line.
     pub item_x16: u32,
+    /// Per text run crossing the line (with or without a glyph under it).
+    pub run_x16: u32,
+    /// Per glyph crossing the line.
     pub glyph_x16: u32,
-    /// Fixed per-line overhead (call, activation scan, compaction).
+    /// Per item becoming active (unpacking it into an active record).
+    pub activate_x16: u32,
+    /// Per active record moved (sorted insert / retire compaction).
+    pub move_x16: u32,
+    /// Per record scanned on a line where something retires.
+    pub retire_scan_x16: u32,
+    /// Fixed per-line overhead.
     pub line_x16: u32,
 }
 
 impl CostModel {
-    /// Cortex-M33 (RP2350), rasterizer and data in SRAM, `opt-level = 3`.
-    /// Rough fit to the 2026-09-17 bench runs; recalibrate when the inner
-    /// loops change.
+    /// Cortex-M33 (RP2350 @ 264 MHz), rasterizer and data in SRAM,
+    /// `opt-level = 3`, scan-out DMA running. **Measured**, not estimated: a
+    /// least-squares fit of [`crate::bench::run`] on the WS-LCD43B, 2026-09-17
+    /// (12 scenes, residuals <= 2.5 %), rounded up ~3 % (activation: the higher
+    /// of the two bench conditions). Re-run the bench when the inner loops
+    /// change. The fit: line 154, fill 0.78/px, LUT 6.37/px, blend 15.5/px,
+    /// item 40.0, run 24.1, glyph 31.9, activate 68-98, move 22.6, retire scan 22.9.
     pub const CORTEX_M33: CostModel = CostModel {
         fill_px_x16: 13,
-        lut_px_x16: 142,
-        blend_px_x16: 270,
-        item_x16: 40 * 16,
-        glyph_x16: 80 * 16,
-        line_x16: 250 * 16,
+        lut_px_x16: 105,
+        blend_px_x16: 255,
+        item_x16: 41 * 16,
+        run_x16: 25 * 16,
+        glyph_x16: 33 * 16,
+        activate_x16: 100 * 16,
+        move_x16: 24 * 16,
+        retire_scan_x16: 24 * 16,
+        line_x16: 158 * 16,
     };
 
     pub fn cycles(&self, w: &LineWork) -> u32 {
         (w.fill_px * self.fill_px_x16
             + w.lut_px * self.lut_px_x16
             + w.blend_px * self.blend_px_x16
-            + w.items * self.item_x16
+            + (w.items - w.runs) * self.item_x16
+            + w.runs * self.run_x16
             + w.glyphs * self.glyph_x16
+            + w.activations * self.activate_x16
+            + w.moves * self.move_x16
+            + w.retire_scan * self.retire_scan_x16
             + self.line_x16)
             / 16
     }
 }
 
-/// The work crossing line `y`.
+/// The work crossing line `y` — a host-side mirror of what
+/// [`crate::raster::Raster::line`] does, bookkeeping included.
 pub fn line_work(list: &ListView<'_>, y: u16) -> LineWork {
     let mut w = LineWork::default();
-    for it in list.items.iter().filter(|it| it.y0 <= y && y < it.y1) {
+    // Retire pass: runs when something ended on the previous line; it scans
+    // every record that was active and moves the ones above the first gap.
+    let was_active = |it: &crate::list::Item| y > 0 && it.y0 < y && y - 1 < it.y1;
+    if let Some(first_gone) = list.items.iter().position(|it| was_active(it) && it.y1 == y) {
+        w.retire_scan = list.items.iter().filter(|it| was_active(it)).count() as u32;
+        w.moves += list.items[first_gone..].iter().filter(|it| was_active(it) && it.y1 > y).count() as u32;
+    }
+    for (z, it) in list.items.iter().enumerate().filter(|(_, it)| it.y0 <= y && y < it.y1) {
         w.items += 1;
+        if it.y0 == y {
+            // Sorted insert: everything already active above it shifts up.
+            // (Items starting on the same line arrive in z order.)
+            w.activations += 1;
+            w.moves += list.items[z + 1..].iter().filter(|o| o.y0 < y && y < o.y1).count() as u32;
+        }
         let px = u32::from(it.x1 - it.x0);
         match it.op {
             OP_FILL => w.fill_px += px,

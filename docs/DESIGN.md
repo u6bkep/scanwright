@@ -72,14 +72,56 @@ measured, none recovered it:
   item per line, which hurts fills and LUT rows more than tidy codegen helps.
 * **kept:** fill + LUT inline, blend out of line: 11.8 / 16.9 ms.
 
-The remaining gap is per-run, per-line overhead (a run is active on every
-line it spans, including the gaps between its glyphs, and its cursor state
-spills). This wants a cycle-accurate harness (a Cortex-M33 bench binary, DWT
-counts per primitive), not more flash-and-look. Ordinary UI pages are
-nowhere near the limit, so it is parked, not forgotten.
+That gap was bookkeeping, and the next section closed it.
 
-`cost::CostModel::CORTEX_M33` is calibrated to this table: whole-frame load
-within +/-5 % (slightly conservative), worst line within ~15 %.
+### Measured unit costs and the active-record rasterizer (2026-09-17)
+
+`bench::run` rasterizes 12 synthetic scenes, each dominated by one kind of
+work, and reports cycles next to exact work counts; a least-squares fit gives
+unit costs with <= 2.5 % residual per scene. First result, with an active list
+of item *indices*: **68 cycles per item per line, +23 per text run, +36 per
+glyph** — on a wall of text the bookkeeping was 60 % of the frame, more than
+the pixels (LUT 6.2, blend 15.8, fill 0.78 cycles/px). Bus contention from the
+live scan-out DMA: only ~5 %.
+
+The rasterizer now unpacks each item **once**, on activation, into a 28-byte
+active record (destination, length, resolved LUT pointer / colour word, a
+running mask-row pointer advanced one stride per line; text runs are a small
+state machine over non-overlapping glyph refs) and compacts only on lines
+where an item ends. Pixel-identical output (golden hashes). Unit costs after:
+
+| per line | fill px | LUT px | blend px | item | run | glyph | activate | record move | retire scan |
+|---|---|---|---|---|---|---|---|---|---|
+| 154 | 0.78 | 6.4 | 15.5 | 40 | 24 | 32 | 68-98 | 23 | 23 |
+
+| scene (bench, clean) | before | after |
+|---|---|---|
+| text wall 21 px, LUT | 2.91 M cyc | 2.07 M (-29 %) |
+| text wall 21 px, blend | 4.41 M | 3.41 M (-23 %) |
+| +24 thin fills | 1.24 M | 0.86 M (-31 %) |
+| sparse text runs | 1.16 M | 0.69 M (-41 %) |
+
+Live demo, Home page: 5.2 -> 4.1 ms per frame; the text wall is now faster
+than the original item-per-glyph spike *and* half its memory.
+
+**A measured hazard: no multi-word copies on the real-time path.** Moving
+active records with a plain struct copy compiles to `ldm`/`stm` and was ~35 %
+cheaper on average — and produced rare 25-35 µs stalls on random lines (worst
+line 12-19 k cycles, different every report) with the scan-out running.
+Field-wise or word-wise *volatile* copies are cycle-for-cycle deterministic
+(worst line identical in every report); word-wise is also the cheapest (23
+cycles/record). Mechanism not understood — multi-beat bus transfers under DMA
+contention are the suspect. Determinism wins: the ring absorbs cost, not
+surprises. `move_record` documents it in the code.
+
+**The cost model prices bookkeeping too.** Activations, record moves and
+retire scans are counted exactly on the host (`cost::line_work` mirrors the
+rasterizer) — without them the model under-predicted burst lines (card edges,
+where a dozen items start at once) by 2x. With them, on the live demo:
+predicted worst line 4922 cycles / 23 % of a core, measured 4916-4920 / 22 %.
+(Before this change the older model had been checked on pages it was not
+calibrated on — Log: predicted 53 %, measured 50 %; Settings: 22 % / 22 %. The
+new predictions for those pages, 36 % and 19 %, are not yet re-measured.)
 
 ## Architecture
 
@@ -190,8 +232,9 @@ within +/-5 % (slightly conservative), worst line within ~15 %.
   other than 90°.
 * `scanwright-sim` (window), `scanwright-bake`, `scanwright-rp2350`, the
   line-sink trait.
-* Rasterizer micro-optimisation with a cycle-accurate bench (see the text-run
-  measurements above); byte -> two-pixel LUT; run-length glyph rows.
+* Remaining rasterizer ideas, now that pixels dominate again: byte -> two-pixel
+  LUT, run-length glyph rows, skipping fills hidden under opaque items.
+* Why do `ldm`/`stm` record copies stall (see the measured hazard)?
 * `Ui` and `DisplayList` statics land in `.data` (non-zero initialisers: the
   `NONE` link sentinel, the font pointers) — ~70 KB of flash image and boot
   copy for nothing. Make their `new()` all-zero.

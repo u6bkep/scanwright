@@ -45,6 +45,23 @@ fn text_wall(b: &mut crate::list::ListBuilder<'_>, font: &Font, text: &str, bg: 
     }
 }
 
+fn tall_fills(b: &mut crate::list::ListBuilder<'_>) {
+    let (w, _) = b.logical_size();
+    for k in 0..16 {
+        b.rect(0, 400 + k * 20, w, 8, ALT);
+    }
+}
+
+fn staggered_fills(b: &mut crate::list::ListBuilder<'_>) {
+    // Logical x is the panel line: each of these covers 6 lines, a new one
+    // starts every 2 lines, in a band of the screen the tall fills don't cover.
+    for k in 0..200 {
+        b.rect(8 + k * 2, 16 + (k % 8) * 40, 6, 24, FG);
+    }
+}
+
+type Scene<'a> = (&'static str, &'a dyn Fn(&mut crate::list::ListBuilder<'_>));
+
 /// Measure every scene. `line` must hold `panel_w` pixels; `now` returns a
 /// free-running cycle count (wrapping is fine).
 pub fn run<const I: usize, const G: usize>(
@@ -58,7 +75,7 @@ pub fn run<const I: usize, const G: usize>(
     assert!(line.len() >= usize::from(panel_w));
     const WIDE: &str = "The quick brown fox jumps over the lazy dog 0123";
     const SPARSE: &str = "i   i   i   i   i   i   i   i   i   i   i   i   i";
-    let scenes: [(&'static str, &dyn Fn(&mut crate::list::ListBuilder<'_>)); 9] = [
+    let scenes: [Scene<'_>; 12] = [
         ("background only", &|_| {}),
         ("+1 full-screen fill", &|b| {
             let (w, h) = b.logical_size();
@@ -83,6 +100,20 @@ pub fn run<const I: usize, const G: usize>(
         // Runs that are active on every line but rarely have a glyph under it.
         ("sparse runs 21px LUT", &|b| text_wall(b, &REGULAR_21, SPARSE, Some(BG))),
         ("big digits 72px LUT", &|b| text_wall(b, &BOLD_72, "0123456", Some(BG))),
+        // Bookkeeping: 16 tall fills, plus 200 short fills staggered down the
+        // panel so something starts and something ends on most lines. With
+        // the short ones on top (higher z) inserts append and retiring moves
+        // nothing; with them underneath every start and end moves 16 records.
+        ("staggered fills on top", &|b| {
+            tall_fills(b);
+            staggered_fills(b);
+        }),
+        // ...and without the tall ones: same starts, a shorter retire scan.
+        ("staggered fills alone", &|b| staggered_fills(b)),
+        ("staggered fills beneath", &|b| {
+            staggered_fills(b);
+            tall_fills(b);
+        }),
     ];
 
     for (name, scene) in scenes {

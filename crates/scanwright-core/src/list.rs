@@ -18,8 +18,9 @@
 //! # Text
 //!
 //! A text run is **one** item plus a 12-byte, self-contained [`GlyphRef`] per
-//! glyph (sorted by first panel line); the rasterizer walks the run with a
-//! cursor. Glyphs that are partly clipped fall back to individual mask items.
+//! glyph, in panel-line order and never sharing a line, so the rasterizer walks
+//! a run one glyph at a time. Glyphs that are partly clipped, or that overlap
+//! the previous glyph's lines, fall back to individual mask items.
 //!
 //! (Measured 2026-09-17: a 6-byte ref that pointed into the font's glyph table
 //! cost ~35 % more rasterizer time than one 20-byte item per glyph — two
@@ -237,7 +238,9 @@ impl ListBuilder<'_> {
             *o = i as u16;
         }
         let items = &*self.items;
-        self.order[..n].sort_unstable_by_key(|&i| items[usize::from(i)].y0);
+        // By first line, then z: items that start together activate in paint
+        // order, so the rasterizer's sorted insert is usually an append.
+        self.order[..n].sort_unstable_by_key(|&i| (items[usize::from(i)].y0, i));
         ListUsage {
             items: n,
             glyphs: usize::from(self.head.n_glyphs),
@@ -300,6 +303,7 @@ impl ListBuilder<'_> {
         let start = usize::from(self.head.n_glyphs);
         // Bounding box of the run's (unclipped) glyphs, panel space.
         let (mut bx0, mut by0, mut bx1, mut by1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+        let mut run_end = i32::MIN;
         let mut pen_64 = lx << 6;
         for ch in text.chars() {
             let Some(g) = font.glyph(ch) else { continue };
@@ -319,9 +323,10 @@ impl ListBuilder<'_> {
             let inside = x0 >= 0 && y0 >= 0 && x1 <= pw && y1 <= ph;
             let n = usize::from(self.head.n_glyphs);
             let info = self.head.fonts.glyphs[usize::from(g.index)];
-            if inside && n < self.glyphs.len() {
-                // Keep the run sorted by first line (insertion; nearly sorted).
-                let r = GlyphRef {
+            // A run's glyphs must not share a panel line (the rasterizer walks
+            // them one at a time); kerned-in neighbours become mask items.
+            if inside && y0 >= run_end && n < self.glyphs.len() {
+                self.glyphs[n] = GlyphRef {
                     x0: x0 as u16,
                     y0: y0 as u16,
                     mask_w: info.mask_w,
@@ -329,21 +334,17 @@ impl ListBuilder<'_> {
                     _pad: 0,
                     offset: info.offset,
                 };
-                let mut k = n;
-                while k > start && self.glyphs[k - 1].y0 > r.y0 {
-                    self.glyphs[k] = self.glyphs[k - 1];
-                    k -= 1;
-                }
-                self.glyphs[k] = r;
                 self.head.n_glyphs += 1;
+                run_end = y1;
                 bx0 = bx0.min(x0);
                 by0 = by0.min(y0);
                 bx1 = bx1.max(x1);
                 by1 = by1.max(y1);
-            } else if inside {
+            } else if inside && y0 >= run_end {
                 self.head.dropped += 1;
             } else {
-                // Partly off-panel: an individually clipped mask item.
+                // Partly off-panel, or overlapping the previous glyph's lines:
+                // an individual (clipped) mask item.
                 let stride = u16::from(info.mask_w).div_ceil(2);
                 let op = if lut { OP_MASK_LUT } else { OP_MASK_BLEND };
                 self.push_mask(x0, y0, g.h as i32, g.w as i32, POOL_ATLAS, info.offset, stride, op, c);
