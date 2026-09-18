@@ -14,6 +14,18 @@ fn capture_round_trips_pixel_exact() {
     assert_eq!(n, buf.len());
     assert_eq!(wire::encode(&view, 42, &mut buf[..10]), Err(n));
 
+    // The same bytes, fetched as windows.
+    let mut pieces = Vec::new();
+    let mut chunk = [0u8; 1000];
+    loop {
+        let k = wire::encode_window(&view, 42, pieces.len(), &mut chunk);
+        if k == 0 {
+            break;
+        }
+        pieces.extend_from_slice(&chunk[..k]);
+    }
+    assert_eq!(pieces, buf);
+
     let cap = Capture::decode(&buf, font::BUILTIN).unwrap();
     assert_eq!(cap.header.seq, 42);
     assert_eq!(cap.header.total_len(), n);

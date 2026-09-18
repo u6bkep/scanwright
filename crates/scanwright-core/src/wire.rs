@@ -48,7 +48,14 @@ pub fn encode(view: &ListView<'_>, seq: u32, out: &mut [u8]) -> Result<usize, us
     if out.len() < need {
         return Err(need);
     }
-    let mut w = Writer { buf: out, at: 0 };
+    Ok(encode_window(view, seq, 0, out))
+}
+
+/// Serialize only bytes `[off, off + out.len())` of the encoding into `out`
+/// (for sending a list in pieces without buffering it whole). Returns the
+/// bytes written: fewer than `out.len()` at the end, 0 past it.
+pub fn encode_window(view: &ListView<'_>, seq: u32, off: usize, out: &mut [u8]) -> usize {
+    let mut w = Writer { buf: out, at: 0, skip: off };
     w.bytes(MAGIC);
     w.u32(seq);
     w.u16(view.panel_w);
@@ -90,18 +97,27 @@ pub fn encode(view: &ListView<'_>, seq: u32, out: &mut [u8]) -> Result<usize, us
         }
     }
     w.bytes(view.pool);
-    Ok(w.at)
+    w.at
 }
 
+/// Writes into `buf`, discarding the first `skip` bytes and everything past
+/// the end of `buf`.
 struct Writer<'a> {
     buf: &'a mut [u8],
     at: usize,
+    skip: usize,
 }
 
 impl Writer<'_> {
-    fn bytes(&mut self, b: &[u8]) {
-        self.buf[self.at..self.at + b.len()].copy_from_slice(b);
-        self.at += b.len();
+    fn bytes(&mut self, mut b: &[u8]) {
+        if self.skip > 0 {
+            let s = self.skip.min(b.len());
+            self.skip -= s;
+            b = &b[s..];
+        }
+        let n = b.len().min(self.buf.len() - self.at);
+        self.buf[self.at..self.at + n].copy_from_slice(&b[..n]);
+        self.at += n;
     }
     fn u8(&mut self, v: u8) {
         self.bytes(&[v]);
