@@ -284,6 +284,28 @@ new predictions for those pages, 36 % and 19 %, are not yet re-measured.)
   landscape UIs, rare in rotated ones).
 * The scan-out ring can likely shrink from 32 lines to ~8.
 
+### First real application (2026-09-17): what it measured
+
+The oven controller's touch UI (four tabs, nine run states, six modal sheets,
+an on-screen keyboard) was ported from Slint in one day on the primitives
+above. Host verification walks every page and sheet, rasterizes it, prices it
+and records arena peaks: 414 nodes, 1051 text bytes, 71 hits, 602 items,
+431 glyphs (the keyboard over the editor), all fitting the panel with a
+16-line ring. Two things the numbers said:
+
+* **The left edge is the expensive line.** In a rotated portrait UI every
+  card, row and button starts at the same logical x, so one panel line
+  activates all of them: 200–350 activations at ~100 cycles each, up to
+  36 k cycles (3.7 line periods) on a sheet-over-page screen whose other
+  lines cost 6–8 k. The ring absorbs it, but activation is now the largest
+  single cost on the worst line, not pixels. Cheaper unpacking, or lazy
+  unpacking of items whose first visible pixel is further down, is the next
+  rasterizer win.
+* **Content under a scrim is still emitted in full.** The sheet screens carry
+  the whole page beneath them (dimmed). Culling items fully covered by an
+  opaque later item is the other obvious win, and would cut those screens
+  roughly in half.
+
 ## Open / next
 
 * Declared bounds on dynamic content (`max_chars`, `each(..).max(n)`) and a
@@ -295,8 +317,9 @@ new predictions for those pages, 36 % and 19 %, are not yet re-measured.)
 * Text wrapping; scale factor (layout is in physical px today); rotations
   other than 90°.
 * `scanwright-bake`, `scanwright-rp2350`, the line-sink trait.
-* Remaining rasterizer ideas, now that pixels dominate again: byte -> two-pixel
-  LUT, run-length glyph rows, skipping fills hidden under opaque items.
+* Remaining rasterizer ideas: cheaper / lazy activation (the left-edge
+  storm above), culling items under opaque later items, byte -> two-pixel
+  LUT, run-length glyph rows.
 * Why do `ldm`/`stm` record copies stall (see the measured hazard)?
 * `Ui` and `DisplayList` statics land in `.data` (non-zero initialisers: the
   `NONE` link sentinel, the font pointers) — ~70 KB of flash image and boot
