@@ -50,13 +50,13 @@ pub struct Panel {
 
 impl Panel {
     /// Waveshare RP2350-Touch-LCD-4.3B: 800x480 at 22 MHz pclk (820 clocks a
-    /// line), RP2350 at 264 MHz, 32-line ring, 20 blanking lines.
+    /// line), RP2350 at 264 MHz, 16-line ring, 20 blanking lines.
     pub const WS_LCD43B: Panel = Panel {
         width: 800,
         height: 480,
         scanout: cost::Scanout {
             budget_cycles: cost::line_budget_cycles(264_000_000, 37_273),
-            ring_lines: 32,
+            ring_lines: 16,
             vblank_lines: 20,
         },
         model: CostModel::CORTEX_M33,

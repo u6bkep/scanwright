@@ -17,7 +17,7 @@ type TestUi = Ui<512, 4096, 64>;
 
 const SCANOUT: cost::Scanout = cost::Scanout {
     budget_cycles: cost::line_budget_cycles(264_000_000, 37_273),
-    ring_lines: 32,
+    ring_lines: 16,
     vblank_lines: 20,
 };
 

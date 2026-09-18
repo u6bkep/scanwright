@@ -48,11 +48,11 @@ fn save(name: &str, fb: &[u16]) {
     enc.write_header().unwrap().write_image_data(&rgb).unwrap();
 }
 
-/// WS-LCD43B: RP2350 @ 264 MHz, 820 clocks per line at 22 MHz pclk, 32-line
+/// WS-LCD43B: RP2350 @ 264 MHz, 820 clocks per line at 22 MHz pclk, 16-line
 /// ring, 20 blanking lines.
 const SCANOUT: cost::Scanout = cost::Scanout {
     budget_cycles: cost::line_budget_cycles(264_000_000, 37_273),
-    ring_lines: 32,
+    ring_lines: 16,
     vblank_lines: 20,
 };
 

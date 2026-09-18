@@ -19,7 +19,7 @@ type OvenUi = Ui<256, 2048, 32>;
 /// WS-LCD43B scan-out (see scanwright-core's render test).
 const SCANOUT: cost::Scanout = cost::Scanout {
     budget_cycles: cost::line_budget_cycles(264_000_000, 37_273),
-    ring_lines: 32,
+    ring_lines: 16,
     vblank_lines: 20,
 };
 
