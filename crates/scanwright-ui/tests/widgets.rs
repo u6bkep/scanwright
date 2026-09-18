@@ -124,7 +124,7 @@ fn widgets_render_fit_and_scroll() {
     let r1 = ui.touch(Touch::Down(420, 215));
     assert!(r1.redraw);
     let r2 = ui.touch(Touch::Up);
-    assert!(r2.event.map_or(false, |e| e.click_index("run") == Some(0)), "{r2:?}");
+    assert!(r2.event.is_some_and(|e| e.click_index("run") == Some(0)), "{r2:?}");
 
     // A drag in the list scrolls it and cancels the press.
     assert_eq!(ui.scroll_offset("list"), 0);
@@ -181,9 +181,9 @@ fn scrim_dims_beneath_and_catches_taps() {
 
     // Taps outside the sheet dismiss; inside, the sheet's buttons win.
     ui.touch(Touch::Down(240, 200));
-    assert!(ui.touch(Touch::Up).event.map_or(false, |e| e.is_click("dismiss")));
+    assert!(ui.touch(Touch::Up).event.is_some_and(|e| e.is_click("dismiss")));
     ui.touch(Touch::Down(360, 760));
-    assert!(ui.touch(Touch::Up).event.map_or(false, |e| e.is_click("stop")));
+    assert!(ui.touch(Touch::Up).event.is_some_and(|e| e.is_click("stop")));
     // The list under the scrim does not scroll.
     ui.touch(Touch::Down(240, 400));
     ui.touch(Touch::Move(240, 200));

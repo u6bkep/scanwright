@@ -359,6 +359,7 @@ impl ListBuilder<'_> {
     }
 
     /// Four corner masks of radius `r` for the panel rect, `color` over `bg`.
+    #[allow(clippy::too_many_arguments)]
     fn corners(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, r: i32, color: u16, bg: Option<u16>) {
         let Some(offs) = self.corner_masks(r as u8) else {
             self.head.dropped += 4;
