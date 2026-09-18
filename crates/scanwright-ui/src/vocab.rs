@@ -41,6 +41,14 @@ pub fn spacer() -> El {
     container(Kind::Column, []).fill_size()
 }
 
+/// A column that scrolls: content taller than the element is clipped and a
+/// vertical drag moves it. **Needs a `.key(..)`** — the offset lives in the
+/// `Ui`'s per-key state and survives rebuilds. Size it with `fill_height()`
+/// or a fixed height; its own intrinsic height is zero.
+pub fn scroll(children: impl IntoIterator<Item = El>) -> El {
+    container(Kind::Scroll, children)
+}
+
 fn text_with(theme: &Theme, font: &'static scanwright_core::font::Font, s: impl Display) -> El {
     with_tree(|t| {
         let off = t.n_text;

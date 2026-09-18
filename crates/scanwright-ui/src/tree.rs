@@ -64,6 +64,9 @@ pub(crate) enum Kind {
     /// Children overlaid; each placed in the content box by `align`
     /// (horizontal) and `justify` (vertical).
     Stack,
+    /// A column whose content may be taller than it: clipped, and shifted up
+    /// by a per-key scroll offset that a vertical drag changes.
+    Scroll,
     Text,
 }
 
@@ -116,8 +119,13 @@ pub(crate) struct Node {
     pub justify: Justify,
     pub fill: Option<u16>,
     pub radius: u8,
+    /// Outline drawn on the fill's edge (needs a fill).
+    pub border_w: u8,
+    pub border_color: u16,
     /// Darken the fill while this node's key is pressed.
     pub pressable: bool,
+    /// Everything painted before this node is dimmed (a modal sheet's scrim).
+    pub scrim: bool,
     pub key: Option<Key>,
     // Text nodes.
     pub text_off: u32,
@@ -125,6 +133,12 @@ pub(crate) struct Node {
     pub font: Option<&'static Font>,
     pub text_color: u16,
     pub text_align: TextAlign,
+    /// Extra px after every glyph (letter spacing).
+    pub tracking: i8,
+    // Scroll nodes: current offset (set from the state table before layout)
+    // and the content height (set by layout).
+    pub scroll: i16,
+    pub extent: i16,
     // Layout results.
     pub intrinsic: (i16, i16),
     pub rect: Rect,
@@ -144,13 +158,19 @@ impl Node {
         justify: Justify::Start,
         fill: None,
         radius: 0,
+        border_w: 0,
+        border_color: 0,
         pressable: false,
+        scrim: false,
         key: None,
         text_off: 0,
         text_len: 0,
         font: None,
         text_color: 0,
         text_align: TextAlign::Start,
+        tracking: 0,
+        scroll: 0,
+        extent: 0,
         intrinsic: (0, 0),
         rect: Rect { x: 0, y: 0, w: 0, h: 0 },
     };
@@ -306,6 +326,16 @@ impl El {
     pub fn radius(self, r: u8) -> Self {
         self.with(|n| n.radius = r)
     }
+    /// A `width` px outline in `color` along the fill's edge. Needs a fill.
+    pub fn border(self, width: u8, color: u16) -> Self {
+        self.with(|n| (n.border_w, n.border_color) = (width, color))
+    }
+    /// Dim everything painted before this element: the scrim under a modal
+    /// sheet. Give it a key to catch the taps outside the sheet. The dimming
+    /// is resolved at emit time — it costs nothing on the real-time side.
+    pub fn scrim(self) -> Self {
+        self.with(|n| n.scrim = true)
+    }
 
     // --- Text -------------------------------------------------------------
 
@@ -321,4 +351,33 @@ impl El {
     pub fn center_text(self) -> Self {
         self.text_align(TextAlign::Center)
     }
+    /// Letter spacing: extra px after every glyph.
+    pub fn tracking(self, px: i8) -> Self {
+        self.with(|n| n.tracking = px)
+    }
+}
+
+impl Rect {
+    pub fn intersect(&self, o: &Rect) -> Rect {
+        let x0 = self.x.max(o.x);
+        let y0 = self.y.max(o.y);
+        let x1 = (self.x + self.w).min(o.x + o.w);
+        let y1 = (self.y + self.h).min(o.y + o.h);
+        Rect { x: x0, y: y0, w: (x1 - x0).max(0), h: (y1 - y0).max(0) }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.w <= 0 || self.h <= 0
+    }
+}
+
+/// Text measurement shared by layout and emit: `\n` separates lines.
+pub(crate) fn text_size(font: &Font, s: &str, tracking: i32) -> (i16, i16) {
+    let mut w = 0i32;
+    let mut lines = 0i32;
+    for line in s.split('\n') {
+        w = w.max(font.measure_tracked(line, tracking));
+        lines += 1;
+    }
+    (w as i16, (lines * font.line_height()) as i16)
 }

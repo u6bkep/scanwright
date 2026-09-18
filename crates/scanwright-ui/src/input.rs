@@ -93,9 +93,27 @@ pub struct Response {
 pub(crate) struct Hit {
     pub rect: Rect,
     pub key: Option<Key>,
+    /// A scroll viewport: drags scroll it, taps fall through to what is under.
+    pub scroll: bool,
 }
 
-/// Topmost hit under the point (the list is in paint order).
+/// Topmost tappable hit under the point (the list is in paint order).
 pub(crate) fn hit_test(hits: &[Hit], x: i16, y: i16) -> Option<Key> {
-    hits.iter().rev().find(|h| h.rect.contains(x, y)).and_then(|h| h.key)
+    hits.iter().rev().find(|h| !h.scroll && h.rect.contains(x, y)).and_then(|h| h.key)
+}
+
+/// The scroll viewport a drag at the point would move: the topmost one under
+/// it, unless something tappable drawn over it (a sheet, a scrim) covers the
+/// point from outside the viewport. Its own children are clipped to its rect,
+/// so "inside the viewport" tells the two apart.
+pub(crate) fn scroll_test(hits: &[Hit], x: i16, y: i16) -> Option<Key> {
+    let mut blocker: Option<Rect> = None;
+    for h in hits.iter().rev().filter(|h| h.rect.contains(x, y)) {
+        if h.scroll {
+            let inside = blocker.is_none_or(|b| h.rect.intersect(&b) == b);
+            return if inside { h.key } else { None };
+        }
+        blocker.get_or_insert(h.rect);
+    }
+    None
 }

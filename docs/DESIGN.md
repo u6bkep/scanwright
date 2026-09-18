@@ -237,13 +237,43 @@ new predictions for those pages, 36 % and 19 %, are not yet re-measured.)
 * `scanwright-rp2350` — PIO + DMA RGB scan-out and the core-1 pump, safe
   writer/reader list handoff. (Today this lives in the Raven firmware repo.)
 
+### Primitives and widgets added 2026-09-17 (for the oven port)
+
+* **Borders without ring masks.** `rounded_rect_bordered` = four outline
+  strips + four corner masks (border colour over the known background, LUT)
+  + three interior fills + four smaller corner masks that *blend*. The
+  smaller masks must blend: their boxes poke past the outer arc whenever the
+  border is thinner than ~0.3 r, so no single colour is under them. Nothing
+  is painted twice outside the corner boxes. *Rejected — ring corner masks:*
+  a new mask family in the pool for a few dozen pixels per line that blend
+  anyway. *Rejected — inner rounded rect over an outer one:* overdraws the
+  whole area (fills are cheap, but not free on a 448 px wide card).
+* **Builder clip rect** (`set_clip`): fills, masks and run glyphs clip to a
+  logical rect instead of the panel. One mechanism serves scroll viewports
+  and labels wider than their box (the port's "elide becomes clip").
+* **Scrims are an emit-time colour transform.** Everything painted before a
+  `.scrim()` node is emitted with its colours at ~30 % (fills, text, the
+  screen background); the sheet drawn after it is full colour. Zero
+  real-time cost against ~7.4 k cycles per line for a blended full-width
+  fill — three quarters of the WS-LCD43B's line budget. One scrim per
+  screen; a second one would not dim twice (documented, not needed).
+* **`scroll(..)` viewports.** A column with an unbounded main axis, clipped
+  to its rect, shifted by a per-key offset that lives in the `Ui` (8 slots)
+  and survives rebuilds. Touch: a press inside becomes a drag after 8 px of
+  travel, cancelling the press; a drag never clicks; an overlay drawn over
+  the viewport from outside it (sheet, scrim) blocks the drag. Offsets are
+  clamped to the content height after layout, with one relayout when a
+  shorter list left a stale offset.
+* Text: `\n` breaks lines (layout measures the widest, emit issues one run
+  per line); `.tracking(px)` letter spacing; `.border(w, colour)`.
+* Capacities raised for the port: 32 LUTs (was 24), 3 KB mask pool and 10
+  corner radii (was 2 KB / 4).
+
 ### Planned primitives
 
-* Ring masks (borders). Icons = SVG baked to coverage masks (no new primitive).
+* Icons = SVG baked to coverage masks (no new primitive).
 * **Span tables** — one `(x0, x1)` per panel line: charts, circles, arbitrary
-  shapes at nearly zero cost.
-* Translucent scrims resolved *in the builder* (recolour what is underneath at
-  emit time) — zero real-time cost.
+  shapes at nearly zero cost. Next: the profile curve.
 * RGB565 images later; flash reads on the real-time path need measuring first.
 
 ### Known cheap wins (not taken yet)
@@ -260,7 +290,8 @@ new predictions for those pages, 36 % and 19 %, are not yet re-measured.)
   checker that prices each tree *shape* at its bounds, so capacity coverage is
   "every page and branch once", not "every state".
 * Node is ~90 bytes (256 nodes = 23 KB); pack it.
-* Persistent per-key widget state table (scroll offsets, animation phase).
+* The per-key state table holds scroll offsets only; animation phase etc.
+  would join it.
 * Text wrapping; scale factor (layout is in physical px today); rotations
   other than 90°.
 * `scanwright-bake`, `scanwright-rp2350`, the line-sink trait.

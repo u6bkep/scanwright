@@ -6,8 +6,11 @@
 //! * Cross axis: `Align::Stretch` (default) gives non-`Fixed` children the
 //!   container's cross extent; otherwise they keep their intrinsic size.
 //! * `Justify` only matters when no child fills the main axis.
+//! * A `Scroll` is a column with an unbounded main axis: its intrinsic
+//!   height is 0 (size it with `Fill`/`Fixed`), the content height lands in
+//!   `extent`, and children start at `-scroll`.
 
-use crate::tree::{Align, Justify, Kind, NONE, Node, Rect, Size, Tree};
+use crate::tree::{Align, Justify, Kind, NONE, Node, Rect, Size, Tree, text_size};
 
 pub(crate) fn layout(tree: &mut Tree<'_>, root: u16, screen: Rect) {
     if root == NONE {
@@ -33,8 +36,7 @@ fn measure(tree: &mut Tree<'_>, i: u16) -> (i16, i16) {
     let (mut w, mut h) = (0i16, 0i16);
     if node.kind == Kind::Text {
         if let Some(font) = node.font {
-            w = font.measure(tree.text_of(&node)) as i16;
-            h = font.line_height() as i16;
+            (w, h) = text_size(font, tree.text_of(&node), i32::from(node.tracking));
         }
     } else {
         let mut count = 0i16;
@@ -43,7 +45,7 @@ fn measure(tree: &mut Tree<'_>, i: u16) -> (i16, i16) {
             let (cw, ch) = measure(tree, c);
             match node.kind {
                 Kind::Row => (w, h) = (w + cw, h.max(ch)),
-                Kind::Column => (w, h) = (w.max(cw), h + ch),
+                Kind::Column | Kind::Scroll => (w, h) = (w.max(cw), h + ch),
                 _ => (w, h) = (w.max(cw), h.max(ch)),
             }
             count += 1;
@@ -52,12 +54,16 @@ fn measure(tree: &mut Tree<'_>, i: u16) -> (i16, i16) {
         let gaps = node.gap * (count - 1).max(0);
         match node.kind {
             Kind::Row => w += gaps,
-            Kind::Column => h += gaps,
+            Kind::Column | Kind::Scroll => h += gaps,
             _ => {}
         }
     }
     w += node.pad.left + node.pad.right;
     h += node.pad.top + node.pad.bottom;
+    if node.kind == Kind::Scroll {
+        tree.nodes[usize::from(i)].extent = h;
+        h = 0;
+    }
     if let Size::Fixed(v) = node.width {
         w = v;
     }
@@ -89,8 +95,9 @@ fn arrange(tree: &mut Tree<'_>, i: u16, rect: Rect) {
                 c = ch.next;
             }
         }
-        Kind::Row | Kind::Column => {
+        Kind::Row | Kind::Column | Kind::Scroll => {
             let row = node.kind == Kind::Row;
+            let scroll = node.kind == Kind::Scroll;
             let main_of = |n: &Node| if row { (n.width, n.intrinsic.0) } else { (n.height, n.intrinsic.1) };
             let (main_start, main_len) = if row { (content.x, content.w) } else { (content.y, content.h) };
 
@@ -103,9 +110,13 @@ fn arrange(tree: &mut Tree<'_>, i: u16, rect: Rect) {
                 count += 1;
             }
             fixed += i32::from(node.gap) * (count - 1).max(0);
-            let spare = (i32::from(main_len) - fixed).max(0);
+            // A scroll's main axis is as long as its content: nothing is spare.
+            let spare = if scroll { 0 } else { (i32::from(main_len) - fixed).max(0) };
 
             let (mut cursor, mut gap) = (i32::from(main_start), i32::from(node.gap));
+            if scroll {
+                cursor -= i32::from(node.scroll);
+            }
             if weights == 0 {
                 match node.justify {
                     Justify::Start => {}

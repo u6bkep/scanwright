@@ -29,10 +29,10 @@
 
 use crate::font::{Font, FontSet};
 
-pub const MAX_LUTS: usize = 24;
+pub const MAX_LUTS: usize = 32;
 /// List-local mask storage (rounded-rect corners).
-pub const POOL_BYTES: usize = 2048;
-const MAX_CORNER_RADII: usize = 4;
+pub const POOL_BYTES: usize = 3072;
+const MAX_CORNER_RADII: usize = 10;
 
 /// Solid fill of `color`.
 pub const OP_FILL: u8 = 0;
@@ -106,6 +106,8 @@ pub struct ListHead {
     fonts: FontSet,
     panel_w: u16,
     panel_h: u16,
+    /// Panel-space clip `(x0, y0, x1, y1)`; the whole panel by default.
+    clip: (u16, u16, u16, u16),
     n_items: u16,
     n_glyphs: u16,
     luts: [[u16; 16]; MAX_LUTS],
@@ -137,6 +139,7 @@ impl<const ITEMS: usize, const GLYPHS: usize> DisplayList<ITEMS, GLYPHS> {
                 fonts,
                 panel_w: 0,
                 panel_h: 0,
+                clip: (0, 0, 0, 0),
                 n_items: 0,
                 n_glyphs: 0,
                 luts: [[0; 16]; MAX_LUTS],
@@ -161,6 +164,7 @@ impl<const ITEMS: usize, const GLYPHS: usize> DisplayList<ITEMS, GLYPHS> {
         let h = &mut self.head;
         h.panel_w = panel_w;
         h.panel_h = panel_h;
+        h.clip = (0, 0, panel_w, panel_h);
         h.n_items = 0;
         h.n_glyphs = 0;
         h.n_luts = 0;
@@ -255,6 +259,26 @@ impl ListBuilder<'_> {
         (i32::from(self.head.panel_h), i32::from(self.head.panel_w))
     }
 
+    /// Clip everything pushed from now on to this logical rect (intersected
+    /// with the panel). Scroll viewports, clipped labels. [`Self::clear_clip`]
+    /// restores the whole panel.
+    pub fn set_clip(&mut self, lx: i32, ly: i32, w: i32, h: i32) {
+        let (x0, y0, x1, y1) = self.to_panel(lx, ly, w.max(0), h.max(0));
+        let (pw, ph) = (i32::from(self.head.panel_w), i32::from(self.head.panel_h));
+        let (x0, y0) = (x0.clamp(0, pw), y0.clamp(0, ph));
+        let (x1, y1) = (x1.clamp(x0, pw), y1.clamp(y0, ph));
+        self.head.clip = (x0 as u16, y0 as u16, x1 as u16, y1 as u16);
+    }
+
+    pub fn clear_clip(&mut self) {
+        self.head.clip = (0, 0, self.head.panel_w, self.head.panel_h);
+    }
+
+    fn clip_i32(&self) -> (i32, i32, i32, i32) {
+        let c = self.head.clip;
+        (i32::from(c.0), i32::from(c.1), i32::from(c.2), i32::from(c.3))
+    }
+
     // ------------------------------------------------------------------
     // Logical-space builders
     // ------------------------------------------------------------------
@@ -282,6 +306,60 @@ impl ListBuilder<'_> {
         self.push_fill(x0, y0 + r, x1, y1 - r, color);
         self.push_fill(x0 + r, y0, x1 - r, y0 + r, color);
         self.push_fill(x0 + r, y1 - r, x1 - r, y1, color);
+        self.corners(x0, y0, x1, y1, r, color, bg);
+    }
+
+    /// A rounded rect of `color` with a `border` px outline in `border_color`.
+    /// Exact and almost all LUT work: the outline is four strips plus four
+    /// corner masks over `bg`; the interior is three fills plus four smaller
+    /// corner masks, which blend (their boxes poke past the outer arc, so no
+    /// single background is known under them). Nothing is painted twice
+    /// except inside the corner boxes.
+    #[allow(clippy::too_many_arguments)]
+    pub fn rounded_rect_bordered(
+        &mut self,
+        lx: i32,
+        ly: i32,
+        w: i32,
+        h: i32,
+        r: i32,
+        color: u16,
+        border: i32,
+        border_color: u16,
+        bg: Option<u16>,
+    ) {
+        let r = r.min(w / 2).min(h / 2).clamp(0, 64);
+        let b = border.clamp(0, r.max(1)).min(w / 2).min(h / 2);
+        if b == 0 {
+            return self.rounded_rect(lx, ly, w, h, r, color, bg);
+        }
+        let (x0, y0, x1, y1) = self.to_panel(lx, ly, w, h);
+        // Outline.
+        self.push_fill(x0, y0 + r, x0 + b, y1 - r, border_color);
+        self.push_fill(x1 - b, y0 + r, x1, y1 - r, border_color);
+        self.push_fill(x0 + r, y0, x1 - r, y0 + b, border_color);
+        self.push_fill(x0 + r, y1 - b, x1 - r, y1, border_color);
+        if r > 0 {
+            self.corners(x0, y0, x1, y1, r, border_color, bg);
+        }
+        // Interior.
+        let ri = r - b;
+        self.push_fill(x0 + b, y0 + r, x1 - b, y1 - r, color);
+        self.push_fill(x0 + r, y0 + b, x1 - r, y0 + r, color);
+        self.push_fill(x0 + r, y1 - r, x1 - r, y1 - b, color);
+        if ri > 0 {
+            self.corners(x0 + b, y0 + b, x1 - b, y1 - b, ri, color, None);
+        } else if r > 0 {
+            // Square interior corners inside a rounded outline.
+            self.push_fill(x0 + b, y0 + b, x0 + r, y0 + r, color);
+            self.push_fill(x1 - r, y0 + b, x1 - b, y0 + r, color);
+            self.push_fill(x0 + b, y1 - r, x0 + r, y1 - b, color);
+            self.push_fill(x1 - r, y1 - r, x1 - b, y1 - b, color);
+        }
+    }
+
+    /// Four corner masks of radius `r` for the panel rect, `color` over `bg`.
+    fn corners(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, r: i32, color: u16, bg: Option<u16>) {
         let Some(offs) = self.corner_masks(r as u8) else {
             self.head.dropped += 4;
             return;
@@ -298,8 +376,24 @@ impl ListBuilder<'_> {
     /// Draw `text` with its baseline at `baseline` (logical y), starting at
     /// logical `lx`. `bg` as for [`Self::rounded_rect`]. Returns the end pen x.
     pub fn text(&mut self, font: &Font, lx: i32, baseline: i32, text: &str, fg: u16, bg: Option<u16>) -> i32 {
+        self.text_tracked(font, lx, baseline, text, fg, bg, 0)
+    }
+
+    /// [`Self::text`] with `tracking` extra logical px after every glyph
+    /// (letter spacing; may be negative).
+    #[allow(clippy::too_many_arguments)]
+    pub fn text_tracked(
+        &mut self,
+        font: &Font,
+        lx: i32,
+        baseline: i32,
+        text: &str,
+        fg: u16,
+        bg: Option<u16>,
+        tracking: i32,
+    ) -> i32 {
         let (lut, c) = self.mask_color(fg, bg);
-        let (pw, ph) = (i32::from(self.head.panel_w), i32::from(self.head.panel_h));
+        let (cx0, cy0, cx1, cy1) = self.clip_i32();
         let start = usize::from(self.head.n_glyphs);
         // Bounding box of the run's (unclipped) glyphs, panel space.
         let (mut bx0, mut by0, mut bx1, mut by1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
@@ -312,7 +406,7 @@ impl ListBuilder<'_> {
         let mut pen_64 = lx << 6;
         for ch in text.chars() {
             let Some(g) = font.glyph(ch) else { continue };
-            let advance = i32::from(g.advance_64);
+            let advance = i32::from(g.advance_64) + (tracking << 6);
             if g.w == 0 || g.h == 0 {
                 pen_64 += advance;
                 continue;
@@ -322,10 +416,10 @@ impl ListBuilder<'_> {
             pen_64 += advance;
             // Pre-rotated mask: g.h wide, g.w tall.
             let (x0, y0, x1, y1) = self.to_panel(gx, gy, g.w as i32, g.h as i32);
-            if x1 <= 0 || y1 <= 0 || x0 >= pw || y0 >= ph {
+            if x1 <= cx0 || y1 <= cy0 || x0 >= cx1 || y0 >= cy1 {
                 continue;
             }
-            let inside = x0 >= 0 && y0 >= 0 && x1 <= pw && y1 <= ph;
+            let inside = x0 >= cx0 && y0 >= cy0 && x1 <= cx1 && y1 <= cy1;
             let n = usize::from(self.head.n_glyphs);
             let info = self.head.fonts.glyphs[usize::from(g.index)];
             // A run's glyphs must not share a panel line (the rasterizer walks
@@ -384,6 +478,12 @@ impl ListBuilder<'_> {
         self.text(font, cx - w / 2, baseline, text, fg, bg);
     }
 
+    /// The pen advance of `text` with `tracking`, as [`Self::text_tracked`]
+    /// lays it out.
+    pub fn measure_tracked(font: &Font, text: &str, tracking: i32) -> i32 {
+        font.measure_tracked(text, tracking)
+    }
+
     // ------------------------------------------------------------------
     // Panel-space pushes (clip here, never in the rasterizer)
     // ------------------------------------------------------------------
@@ -399,8 +499,9 @@ impl ListBuilder<'_> {
     }
 
     fn push_fill(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, color: u16) {
-        let (cx0, cy0) = (x0.max(0), y0.max(0));
-        let (cx1, cy1) = (x1.min(i32::from(self.head.panel_w)), y1.min(i32::from(self.head.panel_h)));
+        let clip = self.clip_i32();
+        let (cx0, cy0) = (x0.max(clip.0), y0.max(clip.1));
+        let (cx1, cy1) = (x1.min(clip.2), y1.min(clip.3));
         if cx0 >= cx1 || cy0 >= cy1 {
             return;
         }
@@ -417,8 +518,9 @@ impl ListBuilder<'_> {
 
     #[allow(clippy::too_many_arguments)]
     fn push_mask(&mut self, x: i32, y: i32, mw: i32, mh: i32, pool: u8, mask_off: u32, stride: u16, op: u8, color: u16) {
-        let (cx0, cy0) = (x.max(0), y.max(0));
-        let (cx1, cy1) = ((x + mw).min(i32::from(self.head.panel_w)), (y + mh).min(i32::from(self.head.panel_h)));
+        let clip = self.clip_i32();
+        let (cx0, cy0) = (x.max(clip.0), y.max(clip.1));
+        let (cx1, cy1) = ((x + mw).min(clip.2), (y + mh).min(clip.3));
         if cx0 >= cx1 || cy0 >= cy1 {
             return;
         }

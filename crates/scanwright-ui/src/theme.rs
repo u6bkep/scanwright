@@ -57,3 +57,10 @@ pub(crate) const fn pressed(c: u16) -> u16 {
     let (r, g, b) = (c >> 11, (c >> 5) & 0x3f, c & 0x1f);
     ((r * 3 / 4) << 11) | ((g * 3 / 4) << 5) | (b * 3 / 4)
 }
+
+/// What a colour looks like under a modal scrim: ~30 % of itself (a 70 %
+/// near-black overlay), applied at emit time to everything under the sheet.
+pub(crate) const fn scrimmed(c: u16) -> u16 {
+    let (r, g, b) = (c >> 11, (c >> 5) & 0x3f, c & 0x1f);
+    ((r * 5 / 16) << 11) | ((g * 5 / 16) << 5) | (b * 5 / 16)
+}

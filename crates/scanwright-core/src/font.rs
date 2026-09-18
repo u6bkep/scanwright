@@ -55,12 +55,17 @@ impl Font {
 
     /// Width of `text` in logical px (no kerning).
     pub fn measure(&self, text: &str) -> i32 {
-        let adv: u32 = text
+        self.measure_tracked(text, 0)
+    }
+
+    /// Width of `text` with `tracking` extra px after every glyph.
+    pub fn measure_tracked(&self, text: &str, tracking: i32) -> i32 {
+        let adv: i32 = text
             .chars()
             .filter_map(|c| self.glyph(c))
-            .map(|g| u32::from(g.advance_64))
+            .map(|g| i32::from(g.advance_64) + (tracking << 6))
             .sum();
-        ((adv + 32) / 64) as i32
+        (adv + 32) >> 6
     }
 
     /// Distance between baselines.
