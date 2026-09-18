@@ -304,6 +304,11 @@ impl ListBuilder<'_> {
         // Bounding box of the run's (unclipped) glyphs, panel space.
         let (mut bx0, mut by0, mut bx1, mut by1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
         let mut run_end = i32::MIN;
+        // Glyphs the run cannot carry (see below), drawn as individual mask
+        // items *after* the run: they may share lines with run glyphs, and a
+        // LUT run would paint background over anything under its box.
+        let mut deferred: [(i32, i32, i32, i32, u32, u16); 8] = [(0, 0, 0, 0, 0, 0); 8];
+        let mut n_deferred = 0usize;
         let mut pen_64 = lx << 6;
         for ch in text.chars() {
             let Some(g) = font.glyph(ch) else { continue };
@@ -343,11 +348,14 @@ impl ListBuilder<'_> {
             } else if inside && y0 >= run_end {
                 self.head.dropped += 1;
             } else {
-                // Partly off-panel, or overlapping the previous glyph's lines:
-                // an individual (clipped) mask item.
+                // Partly off-panel, or overlapping the previous glyph's lines.
                 let stride = u16::from(info.mask_w).div_ceil(2);
-                let op = if lut { OP_MASK_LUT } else { OP_MASK_BLEND };
-                self.push_mask(x0, y0, g.h as i32, g.w as i32, POOL_ATLAS, info.offset, stride, op, c);
+                if n_deferred < deferred.len() {
+                    deferred[n_deferred] = (x0, y0, g.h as i32, g.w as i32, info.offset, stride);
+                    n_deferred += 1;
+                } else {
+                    self.push_mask(x0, y0, g.h as i32, g.w as i32, POOL_ATLAS, info.offset, stride, OP_MASK_BLEND, fg);
+                }
             }
         }
         let count = usize::from(self.head.n_glyphs) - start;
@@ -363,6 +371,9 @@ impl ListBuilder<'_> {
                 n: count as u16,
                 ..Item::EMPTY
             });
+        }
+        for &(x0, y0, mw, mh, off, stride) in &deferred[..n_deferred] {
+            self.push_mask(x0, y0, mw, mh, POOL_ATLAS, off, stride, OP_MASK_BLEND, fg);
         }
         (pen_64 + 32) >> 6
     }

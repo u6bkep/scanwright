@@ -138,7 +138,8 @@ fn bench_scenes_build_and_do_distinct_work() {
     assert!(samples[10].work.retire_scan < samples[9].work.retire_scan);
     assert_eq!(list.dropped(), 0);
     assert!(samples[0].work.items == H as u32 && samples[0].work.lut_px == 0);
-    assert!(samples[4].work.lut_px > 0 && samples[4].work.blend_px == 0);
+    // Overlapping (kerned-in) glyphs blend even in a LUT scene; they are rare.
+    assert!(samples[4].work.lut_px > 0 && samples[4].work.blend_px * 20 < samples[4].work.lut_px);
     assert!(samples[5].work.blend_px > 0 && samples[5].work.lut_px == 0);
     assert!(samples[7].work.runs > 20 * samples[7].work.glyphs / 10, "sparse runs should be mostly idle");
 }
@@ -158,7 +159,7 @@ fn golden_framebuffers() {
         assert_eq!(*h, w, "{scene:?}");
     }
 }
-const GOLDEN_HOME: u64 = 0x2be9_36bc_963a_7ac1;
-const GOLDEN_DENSE_LUT: u64 = 0x606f_d48f_0a43_3966;
+const GOLDEN_HOME: u64 = 0xbef87cea33136de3;
+const GOLDEN_DENSE_LUT: u64 = 0xa39d417a7b652adb;
 // (A LUT is the blend, tabulated: same pixels.)
-const GOLDEN_DENSE_BLEND: u64 = 0x606f_d48f_0a43_3966;
+const GOLDEN_DENSE_BLEND: u64 = 0xa39d417a7b652adb;

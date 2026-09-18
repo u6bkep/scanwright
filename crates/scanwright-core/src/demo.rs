@@ -4,7 +4,7 @@
 use core::fmt::Write as _;
 
 use crate::{
-    font::{BOLD_24, BOLD_72, REGULAR_18, REGULAR_21},
+    font::{TITLE, DISPLAY, CAPTION, BODY},
     hex,
     list::{DisplayList, ListBuilder, ListUsage},
 };
@@ -97,43 +97,43 @@ fn home(l: &mut ListBuilder<'_>, tick: u32) {
 
     // Status bar.
     l.rect(0, 0, w, 48, BAR);
-    l.text(&BOLD_24, 16, 33, "OVEN 1", TEXT, Some(BAR));
+    l.text(&TITLE, 16, 33, "OVEN 1", TEXT, Some(BAR));
     let clock = fmt!("{:02}:{:02}:{:02}", 12, (tick / 600) % 60, (tick / 10) % 60);
-    let cw = REGULAR_21.measure(clock.as_str());
-    l.text(&REGULAR_21, w - 16 - cw, 32, clock.as_str(), MUTED, Some(BAR));
+    let cw = BODY.measure(clock.as_str());
+    l.text(&BODY, w - 16 - cw, 32, clock.as_str(), MUTED, Some(BAR));
 
     // Chamber temperature.
     l.rounded_rect(16, 64, w - 32, 230, 18, CARD, Some(BG));
-    l.text(&REGULAR_18, 36, 98, "CHAMBER", MUTED, Some(CARD));
+    l.text(&CAPTION, 36, 98, "CHAMBER", MUTED, Some(CARD));
     let tenths = 1800 + (tick % 100);
     let temp = fmt!("{}.{}°C", tenths / 10, tenths % 10);
-    l.text_centered(&BOLD_72, w / 2, 196, temp.as_str(), TEXT, Some(CARD));
-    l.text_centered(&REGULAR_21, w / 2, 262, "Setpoint 185.0°C    Ramp 2.0°C/min", MUTED, Some(CARD));
+    l.text_centered(&DISPLAY, w / 2, 196, temp.as_str(), TEXT, Some(CARD));
+    l.text_centered(&BODY, w / 2, 262, "Setpoint 185.0°C    Ramp 2.0°C/min", MUTED, Some(CARD));
 
     // Profile progress.
     l.rounded_rect(16, 310, w - 32, 150, 18, CARD, Some(BG));
-    l.text(&BOLD_24, 36, 350, "Cure cycle B", TEXT, Some(CARD));
-    l.text(&REGULAR_21, 36, 384, "Step 3 of 7 - soak at 185°C", MUTED, Some(CARD));
+    l.text(&TITLE, 36, 350, "Cure cycle B", TEXT, Some(CARD));
+    l.text(&BODY, 36, 384, "Step 3 of 7 - soak at 185°C", MUTED, Some(CARD));
     let track_w = w - 72;
     l.rounded_rect(36, 404, track_w, 16, 8, TRACK, Some(CARD));
     let done = 16 + (track_w - 16) * (tick % 200) as i32 / 200;
     l.rounded_rect(36, 404, done, 16, 8, ACCENT, None);
     let rem = fmt!("{:02}:{:02}:{:02} remaining", 1, 12 - (tick / 600) % 12, 59 - (tick / 10) % 60);
-    l.text(&REGULAR_18, 36, 446, rem.as_str(), MUTED, Some(CARD));
+    l.text(&CAPTION, 36, 446, rem.as_str(), MUTED, Some(CARD));
 
     // Two half cards.
     let half = (w - 48) / 2;
     l.rounded_rect(16, 476, half, 120, 18, CARD, Some(BG));
-    l.text(&REGULAR_18, 36, 510, "HEATER", MUTED, Some(CARD));
+    l.text(&CAPTION, 36, 510, "HEATER", MUTED, Some(CARD));
     let duty = fmt!("{} %", 60 + (tick / 5) % 30);
-    l.text(&BOLD_24, 36, 560, duty.as_str(), TEXT, Some(CARD));
+    l.text(&TITLE, 36, 560, duty.as_str(), TEXT, Some(CARD));
     l.rounded_rect(32 + half, 476, half, 120, 18, CARD, Some(BG));
-    l.text(&REGULAR_18, 52 + half, 510, "FAN", MUTED, Some(CARD));
-    l.text(&BOLD_24, 52 + half, 560, "ON", GREEN, Some(CARD));
+    l.text(&CAPTION, 52 + half, 510, "FAN", MUTED, Some(CARD));
+    l.text(&TITLE, 52 + half, 560, "ON", GREEN, Some(CARD));
 
     // Primary button.
     l.rounded_rect(16, 612, w - 32, 80, 14, ACCENT, Some(BG));
-    l.text_centered(&BOLD_24, w / 2, 661, "START A PROFILE", DARK, Some(ACCENT));
+    l.text_centered(&TITLE, w / 2, 661, "START A PROFILE", DARK, Some(ACCENT));
 
     // Tab bar.
     l.rect(0, h - 80, w, 80, BAR);
@@ -142,7 +142,7 @@ fn home(l: &mut ListBuilder<'_>, tick: u32) {
     for (i, name) in tabs.iter().enumerate() {
         let cx = tw * i as i32 + tw / 2;
         let active = i == 0;
-        l.text_centered(&REGULAR_18, cx, h - 34, name, if active { ACCENT } else { MUTED }, Some(BAR));
+        l.text_centered(&CAPTION, cx, h - 34, name, if active { ACCENT } else { MUTED }, Some(BAR));
         if active {
             l.rect(cx - 40, h - 80, 80, 4, ACCENT);
         }
@@ -153,18 +153,20 @@ fn dense(l: &mut ListBuilder<'_>, tick: u32, bg: Option<u16>) {
     let (w, h) = l.logical_size();
     l.rect(0, 0, w, 48, BAR);
     let title = fmt!("DENSE TEXT  frame {}", tick);
-    l.text(&BOLD_24, 16, 33, title.as_str(), TEXT, Some(BAR));
+    l.text(&TITLE, 16, 33, title.as_str(), TEXT, Some(BAR));
     const LINES: [&str; 4] = [
         "The quick brown fox jumps over the lazy dog 0123",
         "Pack my box with five dozen liquor jugs; 456789",
         "Sphinx of black quartz, judge my vow! (185.0°C)",
         "How vexingly quick daft zebras jump: 12:34:56 %",
     ];
+    // Lines must not overlap: the LUT path assumes a flat background.
+    let pitch = BODY.line_height() + 2;
     let mut y = 76;
     let mut i = 0usize;
     while y < h - 8 {
-        l.text(&REGULAR_21, 8, y, LINES[i % LINES.len()], TEXT, bg);
-        y += 25;
+        l.text(&BODY, 8, y, LINES[i % LINES.len()], TEXT, bg);
+        y += pitch;
         i += 1;
     }
 }

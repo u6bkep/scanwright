@@ -192,6 +192,36 @@ new predictions for those pages, 36 % and 19 %, are not yet re-measured.)
   that exceeds the panel's line budget before it reaches hardware — the
   analogue of damascene's lint system. (2026-09-17)
 
+* **Type scale: four roles, six faces.** (2026-09-17) A real touch UI ported
+  from Slint used 17 font sizes and 4 weights; every face costs atlas RAM
+  (the atlas lives in SRAM so the real-time path never touches flash) and the
+  differences were not visible at arm's length. The baked scale is Caption
+  18 (Regular + Bold), Body 22 (Regular + Bold), Title 27 (Bold), Display 81
+  (Bold, numeric charset) — 61 KB of atlas. Weights 600/800 collapse into
+  Bold. Symbols the text face lacks (`✓ ✎ ▲ ▼ ⌫ ⇧`) are lent by DejaVu Sans
+  at bake time, so there is no separate icon font in the API. The floor is
+  five faces (drop Caption Bold; section heads become uppercase Regular with
+  tracking) before it starts to look different. Sizes are physical px on a
+  480 px wide portrait panel; a scale factor stays on the open list.
+* **Simplify before porting: what a beam-raced UI does not do.** (2026-09-17,
+  ruled for the first application) Word wrap becomes explicit line breaks in
+  the copy (the panel is fixed and the copy is authored in code); elision
+  becomes clipping until a name is seen to clip; corner radii collapse to
+  three plus a pill rule (radius = half the height); no alpha anywhere — a
+  scrim is an emit-time recolouring of the items beneath it, translucent text
+  colours become fixed colours; state-specific layouts reuse the same cards.
+  Kept deliberately: an on-screen keyboard (90 nodes is cheap) and curve
+  graphs (span tables, which also give a live trace later).
+* **Glyphs a run cannot carry are drawn after it, and always blend.**
+  (2026-09-17) A text run's glyphs must not share a panel line; a kerned-in
+  or clipped neighbour becomes its own mask item. It used to be pushed
+  *before* the run and inherit the run's LUT, and a LUT run paints its
+  known background over everything under its box — so the neighbour's pixels
+  were stomped where the run glyph had zero coverage (found by the LUT/blend
+  golden hashes diverging when the 22 px body font made "fo" overlap by one
+  line). Now such glyphs are deferred until after the run item and blended,
+  which is exact whatever is underneath. They are rare, so the cost is noise.
+
 ### Planned crates
 
 * `scanwright-core` — list, rasterizer, font runtime types, cost model. `no_std`.
@@ -199,8 +229,11 @@ new predictions for those pages, 36 % and 19 %, are not yet re-measured.)
   inside core; to be split out so the *application* declares fonts, sizes,
   charsets, rotation and scale).
 * `scanwright-ui` — El vocabulary, layout, widgets, theme, events, hit list.
-* `scanwright-sim` — desktop window running the same rasterizer: pixel-exact,
-  golden-image tests, cost-model reports.
+* `scanwright-sim` (exists, 2026-09-17) — the panel in a winit/softbuffer
+  window: the real rasterizer line by line, the mouse as the touch
+  controller, `App::tick` as the clock, the cost model's verdict in the title
+  bar on every rebuild. `Viewer::render` works without a window, so CI runs
+  the same path (`tests/headless.rs`). `S` saves a PNG.
 * `scanwright-rp2350` — PIO + DMA RGB scan-out and the core-1 pump, safe
   writer/reader list handoff. (Today this lives in the Raven firmware repo.)
 
@@ -230,8 +263,7 @@ new predictions for those pages, 36 % and 19 %, are not yet re-measured.)
 * Persistent per-key widget state table (scroll offsets, animation phase).
 * Text wrapping; scale factor (layout is in physical px today); rotations
   other than 90°.
-* `scanwright-sim` (window), `scanwright-bake`, `scanwright-rp2350`, the
-  line-sink trait.
+* `scanwright-bake`, `scanwright-rp2350`, the line-sink trait.
 * Remaining rasterizer ideas, now that pixels dominate again: byte -> two-pixel
   LUT, run-length glyph rows, skipping fills hidden under opaque items.
 * Why do `ldm`/`stm` record copies stall (see the measured hazard)?

@@ -14,8 +14,12 @@ pub struct Theme {
     pub on_accent: u16,
     pub success: u16,
 
+    /// The type scale: four roles. `body`/`small` have a bold companion for
+    /// emphasis within a role; `title` and `display` are bold only.
     pub body: &'static Font,
+    pub body_bold: &'static Font,
     pub small: &'static Font,
+    pub small_bold: &'static Font,
     pub title: &'static Font,
     pub display: &'static Font,
 
@@ -36,10 +40,12 @@ impl Theme {
         accent: hex(0xf4650f),
         on_accent: hex(0x0f1317),
         success: hex(0x6fcf7f),
-        body: &font::REGULAR_21,
-        small: &font::REGULAR_18,
-        title: &font::BOLD_24,
-        display: &font::BOLD_72,
+        body: &font::BODY,
+        body_bold: &font::BODY_BOLD,
+        small: &font::CAPTION,
+        small_bold: &font::CAPTION_BOLD,
+        title: &font::TITLE,
+        display: &font::DISPLAY,
         card_radius: 18,
         card_padding: 20,
         button_radius: 14,

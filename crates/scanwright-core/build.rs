@@ -11,19 +11,45 @@ use std::{env, fmt::Write as _, fs, path::PathBuf};
 
 struct Spec {
     name: &'static str,
-    file: &'static str,
+    /// Primary face, then fallbacks for characters it lacks (symbols).
+    files: &'static [&'static str],
     px: f32,
     chars: &'static str,
 }
 
 const ASCII: &str = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~°";
+/// Punctuation and UI symbols the text faces carry beyond ASCII. Roboto has
+/// the first few; the arrows, check, pencil, backspace and shift come from
+/// DejaVu Sans at the same size.
+const SYMBOLS: &str = "±—·…‹›✓✎▲▼⌫⇧";
+const TEXT: &[&str] = &[ASCII, SYMBOLS];
+const NUMERIC: &[&str] = &[" 0123456789.:-—°CF%"];
 
+const REGULAR: &[&str] = &["Roboto-Regular.ttf", "DejaVuSans.ttf"];
+const BOLD: &[&str] = &["Roboto-Bold.ttf", "DejaVuSans-Bold.ttf"];
+
+/// The type scale: four roles, six faces (ruling 2026-09-17, see
+/// docs/DESIGN.md). Sizes are physical pixels on a 480 px wide portrait panel.
 const SPECS: &[Spec] = &[
-    Spec { name: "REGULAR_18", file: "Roboto-Regular.ttf", px: 18.0, chars: ASCII },
-    Spec { name: "REGULAR_21", file: "Roboto-Regular.ttf", px: 21.0, chars: ASCII },
-    Spec { name: "BOLD_24", file: "Roboto-Bold.ttf", px: 24.0, chars: ASCII },
-    Spec { name: "BOLD_72", file: "Roboto-Bold.ttf", px: 72.0, chars: " 0123456789.:-°C%" },
+    Spec { name: "CAPTION", files: REGULAR, px: 18.0, chars: "TEXT" },
+    Spec { name: "CAPTION_BOLD", files: BOLD, px: 18.0, chars: "TEXT" },
+    Spec { name: "BODY", files: REGULAR, px: 22.0, chars: "TEXT" },
+    Spec { name: "BODY_BOLD", files: BOLD, px: 22.0, chars: "TEXT" },
+    Spec { name: "TITLE", files: BOLD, px: 27.0, chars: "TEXT" },
+    Spec { name: "DISPLAY", files: BOLD, px: 81.0, chars: "NUMERIC" },
 ];
+
+fn charset(name: &str) -> Vec<char> {
+    let sets = match name {
+        "TEXT" => TEXT,
+        "NUMERIC" => NUMERIC,
+        _ => unreachable!(),
+    };
+    let mut chars: Vec<char> = sets.iter().flat_map(|s| s.chars()).collect();
+    chars.sort_unstable();
+    chars.dedup();
+    chars
+}
 
 fn main() {
     let dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("fonts");
@@ -37,10 +63,19 @@ fn main() {
     // across all fonts; display-list text runs refer to glyphs by this index.
     let mut infos = String::new();
     let mut n_glyphs = 0usize;
+    let mut sizes = String::new();
     for spec in SPECS {
-        let data = fs::read(dir.join(spec.file)).unwrap();
-        let font = fontdue::Font::from_bytes(data, fontdue::FontSettings::default()).unwrap();
-        let lm = font.horizontal_line_metrics(spec.px).unwrap();
+        let faces: Vec<fontdue::Font> = spec
+            .files
+            .iter()
+            .map(|f| {
+                let data = fs::read(dir.join(f)).unwrap();
+                fontdue::Font::from_bytes(data, fontdue::FontSettings::default()).unwrap()
+            })
+            .collect();
+        // Line metrics come from the primary face; fallbacks only lend glyphs.
+        let lm = faces[0].horizontal_line_metrics(spec.px).unwrap();
+        let start = blob.len();
         writeln!(
             src,
             "pub static {}: Font = Font {{ px: {}, ascent: {}, descent: {}, glyphs: &[",
@@ -50,10 +85,11 @@ fn main() {
             (-lm.descent).round() as i16
         )
         .unwrap();
-        let mut chars: Vec<char> = spec.chars.chars().collect();
-        chars.sort_unstable();
-        chars.dedup();
-        for ch in chars {
+        for ch in charset(spec.chars) {
+            let font = faces
+                .iter()
+                .find(|f| f.lookup_glyph_index(ch) != 0)
+                .unwrap_or_else(|| panic!("{}: no face has {ch:?}", spec.name));
             let (m, cov) = font.rasterize(ch, spec.px);
             assert!(m.width < 256 && m.height < 256);
             let (w, h) = (m.width, m.height);
@@ -87,7 +123,9 @@ fn main() {
             n_glyphs += 1;
         }
         writeln!(src, "] }};").unwrap();
+        writeln!(sizes, "//! * `{}`: {} px, {} glyphs, {} B of atlas", spec.name, spec.px, charset(spec.chars).len(), blob.len() - start).unwrap();
     }
+    fs::write(out.join("atlas-sizes.txt"), &sizes).unwrap();
     writeln!(src, "pub const ATLAS_LEN: usize = {};", blob.len()).unwrap();
     writeln!(src, "pub const GLYPH_COUNT: usize = {n_glyphs};").unwrap();
     writeln!(src, "const GLYPH_INFO_INIT: [GlyphInfo; GLYPH_COUNT] = [\n{infos}];").unwrap();

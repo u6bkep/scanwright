@@ -14,7 +14,7 @@
 
 use crate::{
     cost::{LineWork, line_work},
-    font::{BOLD_72, Font, REGULAR_18, REGULAR_21},
+    font::{DISPLAY, Font, CAPTION, BODY},
     hex,
     list::DisplayList,
     raster::Raster,
@@ -94,12 +94,12 @@ pub fn run<const I: usize, const G: usize>(
                 b.rect(0, 16 + k * 30, w, 24, ALT);
             }
         }),
-        ("text wall 21px LUT", &|b| text_wall(b, &REGULAR_21, WIDE, Some(BG))),
-        ("text wall 21px blend", &|b| text_wall(b, &REGULAR_21, WIDE, None)),
-        ("text wall 18px LUT", &|b| text_wall(b, &REGULAR_18, WIDE, Some(BG))),
+        ("text wall 22px LUT", &|b| text_wall(b, &BODY, WIDE, Some(BG))),
+        ("text wall 22px blend", &|b| text_wall(b, &BODY, WIDE, None)),
+        ("text wall 18px LUT", &|b| text_wall(b, &CAPTION, WIDE, Some(BG))),
         // Runs that are active on every line but rarely have a glyph under it.
-        ("sparse runs 21px LUT", &|b| text_wall(b, &REGULAR_21, SPARSE, Some(BG))),
-        ("big digits 72px LUT", &|b| text_wall(b, &BOLD_72, "0123456", Some(BG))),
+        ("sparse runs 22px LUT", &|b| text_wall(b, &BODY, SPARSE, Some(BG))),
+        ("big digits 81px LUT", &|b| text_wall(b, &DISPLAY, "0123456", Some(BG))),
         // Bookkeeping: 16 tall fills, plus 200 short fills staggered down the
         // panel so something starts and something ends on most lines. With
         // the short ones on top (higher z) inserts append and retiring moves

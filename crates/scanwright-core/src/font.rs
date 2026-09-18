@@ -1,6 +1,13 @@
 //! Build-time baked fonts (see `build.rs`): 4-bit coverage masks, pre-rotated
 //! into panel space.
 //!
+//! The baked type scale — four roles, six faces, sizes in physical px of a
+//! 480 px wide portrait panel (ruling 2026-09-17, docs/DESIGN.md):
+#![doc = include_str!(concat!(env!("OUT_DIR"), "/atlas-sizes.txt"))]
+//!
+//! `CAPTION`, `BODY` and `TITLE` carry ASCII plus `°±—·…‹›✓✎▲▼⌫⇧`; `DISPLAY`
+//! is numeric (`0-9 . : - — ° C F %`).
+//!
 //! Two views of the same glyphs:
 //!
 //! * [`Font`] / [`Glyph`] — metrics for the soft side (measuring, laying out,

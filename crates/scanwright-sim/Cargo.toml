@@ -1,0 +1,16 @@
+[package]
+name = "scanwright-sim"
+description = "Host viewer for scanwright: the panel in a window, the mouse as the touch controller, the cost model in the title bar"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+scanwright-core = { path = "../scanwright-core" }
+scanwright-ui = { path = "../scanwright-ui", features = ["std"] }
+winit = { version = "0.30", default-features = false, features = ["rwh_06", "x11", "wayland"] }
+softbuffer = { version = "0.4", default-features = false, features = ["x11", "wayland"] }
+png = "0.17"
