@@ -330,6 +330,11 @@ impl El {
     pub fn border(self, width: u8, color: u16) -> Self {
         self.with(|n| (n.border_w, n.border_color) = (width, color))
     }
+    /// Darken the fill while this element's key is pressed (what the stock
+    /// `button` does); for custom tappable widgets.
+    pub fn pressable(self) -> Self {
+        self.with(|n| n.pressable = true)
+    }
     /// Dim everything painted before this element: the scrim under a modal
     /// sheet. Give it a key to catch the taps outside the sheet. The dimming
     /// is resolved at emit time — it costs nothing on the real-time side.

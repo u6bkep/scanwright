@@ -111,12 +111,7 @@ pub fn button(label: impl Display) -> El {
         .height(Size::Fixed(80))
         .align(Align::Center)
         .justify(Justify::Center);
-    with_tree(|t| {
-        if let Some(n) = t.node(el) {
-            n.pressable = true;
-        }
-    });
-    el
+    el.pressable()
 }
 
 /// A horizontal progress bar, `fraction` in 0..=1 (as parts per 1000).
