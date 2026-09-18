@@ -188,6 +188,11 @@ impl<const ITEMS: usize, const GLYPHS: usize> DisplayList<ITEMS, GLYPHS> {
     }
 
     /// The sealed list, as the rasterizer sees it.
+    ///
+    /// Always inlined: a real-time pump living in RAM calls this, and an
+    /// out-of-line copy would sit in flash — fatal while a flash program or
+    /// erase has XIP disabled.
+    #[inline(always)]
     pub fn view(&self) -> ListView<'_> {
         let h = &self.head;
         ListView {
