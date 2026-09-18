@@ -101,6 +101,12 @@ pub struct GlyphRef {
     pub offset: u32,
 }
 
+impl GlyphRef {
+    pub const fn new(x0: u16, y0: u16, mask_w: u8, mask_h: u8, offset: u32) -> Self {
+        GlyphRef { x0, y0, mask_w, mask_h, _pad: 0, offset }
+    }
+}
+
 /// Capacity-independent part of a list.
 pub struct ListHead {
     fonts: FontSet,

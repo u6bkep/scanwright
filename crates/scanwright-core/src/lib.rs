@@ -33,6 +33,7 @@ pub mod demo;
 pub mod font;
 pub mod list;
 pub mod raster;
+pub mod wire;
 
 /// RGB565 from 8-bit components.
 pub const fn rgb(r: u8, g: u8, b: u8) -> u16 {

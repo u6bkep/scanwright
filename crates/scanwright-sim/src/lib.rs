@@ -362,3 +362,90 @@ impl<A: App> ApplicationHandler for Viewer<A> {
         event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_tick));
     }
 }
+
+/// A display list received from a device ([`scanwright_core::wire`]), owned.
+/// Rasterize it with the host's copy of the same baked fonts to see exactly
+/// what the panel shows.
+pub struct Capture {
+    pub header: scanwright_core::wire::Header,
+    items: Vec<scanwright_core::list::Item>,
+    order: Vec<u16>,
+    glyphs: Vec<scanwright_core::list::GlyphRef>,
+    luts: Vec<[u16; 16]>,
+    pool: Vec<u8>,
+}
+
+impl Capture {
+    /// Decode a complete wire blob. Refuses a list baked against other fonts.
+    pub fn decode(bytes: &[u8], fonts: scanwright_core::font::FontSet) -> Result<Capture, String> {
+        use scanwright_core::wire;
+        let h = wire::Header::parse(bytes).ok_or("not a scanwright list (bad magic / short header)")?;
+        if bytes.len() < h.total_len() {
+            return Err(format!("truncated: {} of {} bytes", bytes.len(), h.total_len()));
+        }
+        if h.atlas_len as usize != fonts.atlas.len() || h.atlas_hash != wire::atlas_hash(fonts.atlas) {
+            return Err("the device's fonts differ from this build's".into());
+        }
+        let mut items = vec![scanwright_core::list::Item::EMPTY; usize::from(h.n_items)];
+        let mut order = vec![0u16; usize::from(h.n_items)];
+        let mut glyphs = vec![scanwright_core::list::GlyphRef::new(0, 0, 0, 0, 0); usize::from(h.n_glyphs)];
+        let mut luts = vec![[0u16; 16]; usize::from(h.n_luts)];
+        let mut pool = vec![0u8; usize::from(h.pool_len)];
+        wire::decode_into(bytes, &mut items, &mut order, &mut glyphs, &mut luts, &mut pool).ok_or("decode failed")?;
+        Ok(Capture { header: h, items, order, glyphs, luts, pool })
+    }
+
+    pub fn view(&self, fonts: scanwright_core::font::FontSet) -> ListView<'_> {
+        ListView {
+            panel_w: self.header.panel_w,
+            panel_h: self.header.panel_h,
+            items: &self.items,
+            order: &self.order,
+            glyphs: &self.glyphs,
+            luts: &self.luts,
+            pool: &self.pool,
+            atlas: fonts.atlas,
+        }
+    }
+
+    /// Rasterize the whole frame (panel space, RGB565).
+    pub fn rasterize(&self, fonts: scanwright_core::font::FontSet) -> Vec<u16> {
+        let view = self.view(fonts);
+        let (w, h) = (usize::from(view.panel_w), usize::from(view.panel_h));
+        let mut fb = vec![0u16; w * h];
+        let mut raster = Raster::new();
+        raster.begin_frame();
+        for y in 0..h {
+            // Safety: each line has `panel_w` pixels; the view is self-consistent.
+            unsafe { raster.line(&view, y as u16, fb[y * w..].as_mut_ptr(), true) };
+        }
+        fb
+    }
+
+    /// Rasterize and save as a portrait PNG (the 90° rotation undone).
+    pub fn save_png(&self, fonts: scanwright_core::font::FontSet, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        let fb = self.rasterize(fonts);
+        let (pw, ph) = (usize::from(self.header.panel_w), usize::from(self.header.panel_h));
+        let (lw, lh) = (ph, pw);
+        let mut rgb = vec![0u8; lw * lh * 3];
+        for ly in 0..lh {
+            for lx in 0..lw {
+                let p = fb[lx * pw + (pw - 1 - ly)];
+                let o = (ly * lw + lx) * 3;
+                rgb[o] = ((p >> 11) as u8) << 3;
+                rgb[o + 1] = ((p >> 5) as u8 & 0x3f) << 2;
+                rgb[o + 2] = (p as u8 & 0x1f) << 3;
+            }
+        }
+        let file = std::fs::File::create(path)?;
+        let mut enc = png::Encoder::new(std::io::BufWriter::new(file), lw as u32, lh as u32);
+        enc.set_color(png::ColorType::Rgb);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.write_header()?.write_image_data(&rgb).map_err(std::io::Error::other)
+    }
+
+    /// Price the captured list against a panel.
+    pub fn report(&self, fonts: scanwright_core::font::FontSet, panel: &Panel) -> cost::Report {
+        cost::analyze(&self.view(fonts), &panel.model, &panel.scanout)
+    }
+}
