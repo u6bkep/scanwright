@@ -21,7 +21,7 @@ const ASCII: &str = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXY
 /// Punctuation and UI symbols the text faces carry beyond ASCII. Roboto has
 /// the first few; the arrows, check, pencil, backspace and shift come from
 /// DejaVu Sans at the same size.
-const SYMBOLS: &str = "±—·…‹›✓✎▲▼⌫⇧";
+const SYMBOLS: &str = "±—·…‹›✓✎▲▼⌫⇧●";
 const TEXT: &[&str] = &[ASCII, SYMBOLS];
 const NUMERIC: &[&str] = &[" 0123456789.:-—°CF%"];
 

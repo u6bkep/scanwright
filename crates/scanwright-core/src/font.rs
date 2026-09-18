@@ -5,7 +5,7 @@
 //! 480 px wide portrait panel (ruling 2026-09-17, docs/DESIGN.md):
 #![doc = include_str!(concat!(env!("OUT_DIR"), "/atlas-sizes.txt"))]
 //!
-//! `CAPTION`, `BODY` and `TITLE` carry ASCII plus `°±—·…‹›✓✎▲▼⌫⇧`; `DISPLAY`
+//! `CAPTION`, `BODY` and `TITLE` carry ASCII plus `°±—·…‹›✓✎▲▼⌫⇧●`; `DISPLAY`
 //! is numeric (`0-9 . : - — ° C F %`).
 //!
 //! Two views of the same glyphs:
