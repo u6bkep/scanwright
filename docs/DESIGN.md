@@ -222,6 +222,26 @@ new predictions for those pages, 36 % and 19 %, are not yet re-measured.)
   line). Now such glyphs are deferred until after the run item and blended,
   which is exact whatever is underneath. They are rare, so the cost is noise.
 
+* **Remote capture is a display list, not a framebuffer.** (2026-09-17) A
+  device serializes the list core 1 is showing (`wire`, ~7–11 KB for the
+  oven's pages) and the host rasterizes it with the same code: a
+  pixel-exact screenshot, plus the cost model priced against the *device's*
+  measured worst line for that very list. Paired with touch injection
+  through the device's own touch path (`oven-remote` in Raven), an agent
+  drives and reviews the real panel without a human. Lists are fetched in
+  windows; the device pins the encoded copy between windows so a UI that
+  republishes at 1 Hz cannot tear a capture.
+* **The pump core must be flash-free, and flash operations must not pause
+  it.** (2026-09-17, rp2350) Everything core 1 touches lives in SRAM: pump,
+  rasterizer, lists, atlas, ring, DMA table. Two things broke this in
+  practice: an out-of-line `DisplayList::view` in flash (now
+  `#[inline(always)]`; a disassembly check greps `pump`/`Raster::line` for
+  branches into `0x10……`), and embassy-rp's flash driver pausing core 1 over
+  the FIFO for every program/erase — one underrun and skipped lines per
+  settings write, measured through the capture endpoint's counters. The
+  Raven embassy fork gained `flash::set_core1_flash_independent(true)` for
+  applications that hold the invariant. Belongs in `scanwright-rp2350`.
+
 ### Planned crates
 
 * `scanwright-core` — list, rasterizer, font runtime types, cost model. `no_std`.
